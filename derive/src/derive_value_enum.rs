@@ -36,15 +36,24 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<ValueEnumImpl<'_>> {
                     "only unit variant is supported",
                 ));
             }
-            let arg_name = heck::AsKebabCase(variant.ident.to_string()).to_string();
-            Ok((arg_name, &variant.ident))
+            // TODO: Custom renaming.
+            let value_str = heck::AsKebabCase(variant.ident.to_string()).to_string();
+            // This is not possible for now, but will be if we support renaming `value(name = "..")`.
+            if value_str.contains(|c: char| c.is_ascii_control()) {
+                return Err(syn::Error::new(
+                    variant.ident.span(),
+                    "value names containing ASCII control characters are not supported",
+                ));
+            }
+
+            Ok(Variant { value_str, ident: &variant.ident })
         })
         .collect::<syn::Result<Vec<_>>>()?;
 
-    variants.sort_by(|lhs, rhs| Ord::cmp(&lhs.0, &rhs.0));
-    if let Some(w) = variants.windows(2).find(|w| w[0].0 == w[1].0) {
-        let mut err = syn::Error::new(w[0].1.span(), "duplicated variant names after renaming");
-        err.combine(syn::Error::new(w[1].1.span(), "second variant here"));
+    variants.sort_by(|lhs, rhs| Ord::cmp(&lhs.value_str, &rhs.value_str));
+    if let Some(w) = variants.windows(2).find(|w| w[0].value_str == w[1].value_str) {
+        let mut err = syn::Error::new(w[0].ident.span(), "duplicated variant names after renaming");
+        err.combine(syn::Error::new(w[1].ident.span(), "second variant here"));
         return Err(err);
     }
 
@@ -54,34 +63,31 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<ValueEnumImpl<'_>> {
 struct ValueEnumImpl<'i> {
     ident: &'i Ident,
     generics: &'i Generics,
-    variants: Vec<(String, &'i Ident)>,
+    variants: Vec<Variant<'i>>,
+}
+
+struct Variant<'i> {
+    value_str: String,
+    ident: &'i Ident,
 }
 
 impl ToTokens for ValueEnumImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let name = self.ident;
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
-        let variant_strs = self.variants.iter().map(|(s, _)| s);
-        let variant_names = self.variants.iter().map(|(_, name)| name);
-
-        if self.variants.is_empty() {
-            tokens.extend(quote! {
-                #[automatically_derived]
-                impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {
-                    fn parse_value(_: &__rt::str) -> __rt::Option<Self> {
-                        __rt::None
-                    }
-                }
-            });
-            return;
-        }
+        let variant_strs = self.variants.iter().map(|v| &v.value_str);
+        let variant_idents = self.variants.iter().map(|v| v.ident);
+        let possible_inputs_nul =
+            self.variants.iter().flat_map(|v| [&v.value_str, "\0"]).collect::<String>();
 
         tokens.extend(quote! {
             #[automatically_derived]
             impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {
+                const POSSIBLE_INPUTS_NUL: &'static str = #possible_inputs_nul;
+
                 fn parse_value(__v: &__rt::str) -> __rt::Option<Self> {
                     __rt::Some(match __v {
-                        #(#variant_strs => Self:: #variant_names,)*
+                        #(#variant_strs => Self:: #variant_idents,)*
                         _ => return __rt::None
                     })
                 }

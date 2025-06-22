@@ -30,6 +30,8 @@ struct Inner {
     input: Option<OsString>,
     /// The underlying source error, if there is any.
     source: Option<DynStdError>,
+    /// Possible value strings, terminated by NUL.
+    possible_inputs_nul: Option<&'static str>,
 
     #[cfg(feature = "help")]
     subcommand_path: crate::help::SubcommandPath,
@@ -146,7 +148,21 @@ impl fmt::Display for Error {
             ErrorKind::InvalidValue => {
                 f.write_str("invalid value")?;
                 opt_input(f)?;
-                opt_for_arg(f)
+                opt_for_arg(f)?;
+                if let Some(strs) = e.possible_inputs_nul {
+                    f.write_str("\n  [possible values: ")?;
+                    let mut first = true;
+                    for s in strs.split_terminator('\0') {
+                        if first {
+                            first = false
+                        } else {
+                            f.write_str(", ")?
+                        }
+                        f.write_str(s)?;
+                    }
+                    f.write_str("]")?;
+                }
+                Ok(())
             }
             ErrorKind::MissingEq => {
                 f.write_str("equal sign is needed when assigning values")?;
@@ -198,6 +214,7 @@ impl Error {
             arg_desc: None,
             input: None,
             source: None,
+            possible_inputs_nul: None,
             #[cfg(feature = "help")]
             subcommand_path: Vec::new(),
         }))
@@ -218,6 +235,12 @@ impl Error {
 
     pub(crate) fn with_arg_desc(mut self, arg_desc: Option<&'static str>) -> Self {
         self.0.arg_desc = arg_desc;
+        self
+    }
+
+    pub(crate) fn with_possible_values(mut self, possible_inputs_nul: &'static str) -> Self {
+        self.0.possible_inputs_nul =
+            (!possible_inputs_nul.is_empty()).then_some(possible_inputs_nul);
         self
     }
 

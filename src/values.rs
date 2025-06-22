@@ -18,10 +18,18 @@ mod sealed {
     to make it parseable"
 )]
 pub trait ArgValueInfo<T>: 'static + Sized + sealed::Sealed {
+    /// Possible input strings terminated by NUL.
+    const POSSIBLE_INPUTS_NUL: &'static str = "";
+
     fn parse(v: &OsStr) -> Result<T>;
 }
 
+/// This trait definition is not a public API, only the derive-macro is.
+#[doc(hidden)]
 pub trait ValueEnum: Sized {
+    /// See [`ArgValueInfo::POSSIBLE_INPUTS_NUL`].
+    const POSSIBLE_INPUTS_NUL: &'static str;
+
     fn parse_value(s: &str) -> Option<Self>;
 }
 
@@ -47,12 +55,16 @@ impl<T: ValueEnum> InferValueParser<T, &&&&()> {
         struct Info;
         impl sealed::Sealed for Info {}
         impl<T: ValueEnum> ArgValueInfo<T> for Info {
+            const POSSIBLE_INPUTS_NUL: &'static str = T::POSSIBLE_INPUTS_NUL;
+
             fn parse(v: &OsStr) -> Result<T> {
                 // TODO: better diagnostics?
                 v.to_str()
                     .ok_or(ErrorKind::InvalidUtf8)
                     .and_then(|s| T::parse_value(s).ok_or(ErrorKind::InvalidValue))
-                    .map_err(|err| err.with_input(v.to_owned()))
+                    .map_err(|err| {
+                        err.with_input(v.to_owned()).with_possible_values(T::POSSIBLE_INPUTS_NUL)
+                    })
             }
         }
         Info
