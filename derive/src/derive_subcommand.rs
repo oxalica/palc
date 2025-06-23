@@ -21,9 +21,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         impl __rt::Sealed for #name {}
 
         #[automatically_derived]
-        impl __rt::CommandInternal for #name {
-            const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = &__rt::RawCommandInfo::empty();
-        }
+        impl __rt::CommandInternal for #name {}
     }));
     tts
 }
@@ -31,26 +29,27 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
 struct SubcommandImpl<'i> {
     enum_name: &'i Ident,
     state_defs: Vec<ParserStateDefImpl<'i>>,
+    // (name, kind)
     variants: Vec<(String, VariantImpl<'i>)>,
 }
 
 enum VariantImpl<'i> {
-    Unit { variant_name: &'i Ident },
-    Tuple { variant_name: &'i Ident, ty: &'i Type },
-    Struct { state_name: Ident },
+    Unit { ident: &'i Ident },
+    Tuple { ident: &'i Ident, ty: &'i Type },
+    Struct { state_ident: Ident },
 }
 
 impl ToTokens for VariantImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.extend(match self {
             // Consume all rest args, possibly feed global arguments.
-            VariantImpl::Unit { variant_name } => quote! {
+            VariantImpl::Unit { ident: variant_name } => quote! {
                 |__args, __cmd_name, __ancestors| {
                     __rt::try_parse_state::<()>(__args, __cmd_name, __ancestors)?;
                     __rt::Ok(Self::#variant_name)
                 }
             },
-            VariantImpl::Tuple { variant_name, ty } => quote_spanned! {ty.span()=>
+            VariantImpl::Tuple { ident: variant_name, ty } => quote_spanned! {ty.span()=>
                 |__args, __cmd_name, __ancestors| {
                     __rt::Ok(Self::#variant_name(__rt::try_parse_state::<<#ty as __rt::Args>::__State>(
                         __args,
@@ -59,7 +58,7 @@ impl ToTokens for VariantImpl<'_> {
                     )?))
                 }
             },
-            VariantImpl::Struct { state_name } => quote! {
+            VariantImpl::Struct { state_ident: state_name } => quote! {
                 __rt::try_parse_state::<#state_name>
             },
         });
@@ -92,7 +91,7 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
             let act = match &variant.fields {
                 syn::Fields::Unit => {
                     // TODO: Handle `command()` here.
-                    VariantImpl::Unit { variant_name }
+                    VariantImpl::Unit { ident: variant_name }
                 }
                 syn::Fields::Unnamed(fields) => {
                     if fields.unnamed.len() != 1 {
@@ -103,7 +102,7 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
                         return None;
                     }
                     // TODO: Handle or reject `command()` here.
-                    VariantImpl::Tuple { variant_name, ty: &fields.unnamed[0].ty }
+                    VariantImpl::Tuple { ident: variant_name, ty: &fields.unnamed[0].ty }
                 }
                 syn::Fields::Named(fields) => {
                     let cmd_meta = errs.collect(CommandMeta::parse_attrs(&variant.attrs));
@@ -118,7 +117,7 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
                     ))?;
                     state.output_ctor = Some(quote!(#enum_name :: #variant_name));
                     state_defs.push(state);
-                    VariantImpl::Struct { state_name }
+                    VariantImpl::Struct { state_ident: state_name }
                 }
             };
             Some((arg_name, act))
@@ -134,24 +133,20 @@ impl ToTokens for SubcommandImpl<'_> {
         let name_strs = variants.iter().map(|(name, _)| name);
         let cases = variants.iter().map(|(_, v)| v);
 
-        let name_arg_infos = variants
+        let subcmds = name_strs.clone().flat_map(|name| [name, "\0"]).collect::<String>();
+        let subcmd_docs = variants
             .iter()
-            .map(|(name, variant)| {
-                let arg_info = match variant {
-                    VariantImpl::Unit { .. } => {
-                        quote! { __rt::RawArgsInfo::empty() }
-                    }
-                    VariantImpl::Tuple { ty, .. } => {
-                        quote_spanned! {ty.span()=> <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO }
-                    }
-                    VariantImpl::Struct { state_name } => {
-                        quote_spanned! {state_name.span()=> <#state_name as __rt::ParserState>::RAW_ARGS_INFO }
-                    }
-                };
-                (name.as_str(), arg_info)
+            .map(|(_, v)| match v {
+                // TODO
+                VariantImpl::Unit { .. } => quote! { "" },
+                VariantImpl::Tuple { ty, .. } => quote! {
+                    <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__applet_doc
+                },
+                VariantImpl::Struct { state_ident } => quote! {
+                    <#state_ident as __rt::ParserState>::RAW_ARGS_INFO.__applet_doc
+                },
             })
-            .collect::<Vec<_>>();
-        let raw_cmd_info = RawCommandInfo::Subcommand { name_arg_infos: &name_arg_infos };
+            .collect::<Vec<TokenStream>>();
 
         tokens.extend(quote! {
             #(#state_defs)*
@@ -164,7 +159,8 @@ impl ToTokens for SubcommandImpl<'_> {
 
             #[automatically_derived]
             impl __rt::CommandInternal for #enum_name {
-                const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
+                const SUBCOMMANDS: &'static __rt::str = #subcmds;
+                const SUBCOMMAND_DOCS: &'static [&'static __rt::str] = &[#(#subcmd_docs),*];
 
                 fn feed_subcommand(__name: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
                     __rt::Some(match __name.to_str() {
@@ -175,41 +171,6 @@ impl ToTokens for SubcommandImpl<'_> {
                         __rt::None => return __rt::None,
                     })
                 }
-            }
-        });
-    }
-}
-
-pub enum RawCommandInfo<'a> {
-    /// A command defined as a `derive(Parser)` struct.
-    Args { state_name: &'a Ident },
-    /// A command defined as a `derive(Subcommand)` enum.
-    Subcommand { name_arg_infos: &'a [(&'a str, TokenStream)] },
-}
-
-impl ToTokens for RawCommandInfo<'_> {
-    // See format in `RawCommandInfo`.
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let (raw_names, subinfos) = match self {
-            RawCommandInfo::Args { state_name } => {
-                let subinfos = quote! {
-                    [<#state_name as __rt::ParserState>::RAW_ARGS_INFO]
-                };
-                (String::new(), subinfos)
-            }
-            RawCommandInfo::Subcommand { name_arg_infos } => {
-                let raw_names =
-                    name_arg_infos.iter().flat_map(|(name, _)| [name, "\t"]).collect::<String>();
-                let subinfos = name_arg_infos.iter().map(|(_, tts)| tts);
-                let subinfos = quote! { [#(#subinfos),*] };
-                (raw_names, subinfos)
-            }
-        };
-
-        tokens.extend(quote! {
-            &__rt::RawCommandInfo {
-                __raw_names: #raw_names,
-                __subcommands: &#subinfos,
             }
         });
     }

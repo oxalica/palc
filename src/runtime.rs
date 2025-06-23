@@ -8,7 +8,7 @@ use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
 
 use crate::error::ErrorKind;
-use crate::refl::{RawArgsInfo, RawCommandInfo};
+use crate::refl::RawArgsInfo;
 use crate::shared::{AcceptHyphen, ArgAttrs};
 use crate::values::ArgValueInfo;
 use crate::{Args, Result, Subcommand};
@@ -47,18 +47,18 @@ macro_rules! __const_concat {
 #[cfg(feature = "help")]
 #[macro_export]
 #[doc(hidden)]
-macro_rules! __gate_help_str {
-    ($($tt:tt)*) => {
-        $($tt)*
+macro_rules! __gate_help {
+    ($disabled:expr, $($enabled:tt)*) => {
+        $($enabled)*
     };
 }
 
 #[cfg(not(feature = "help"))]
 #[macro_export]
 #[doc(hidden)]
-macro_rules! __gate_help_str {
-    ($($tt:tt)*) => {
-        ""
+macro_rules! __gate_help {
+    ($disabled:expr, $($enabled:tt)*) => {
+        $disabled
     };
 }
 
@@ -267,7 +267,7 @@ pub trait ParserChain {
 impl dyn ParserChain + '_ {
     fn feed_named(&mut self, enc_name: &str) -> GlobalFeedNamed<'_> {
         let Some(node) = self.out() else { return ControlFlow::Continue(()) };
-        let raw_arg_descs = node.state.metadata().1.__raw_arg_descs;
+        let raw_arg_descs = node.state.metadata().1.__arg_descs;
         if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name) {
             return ControlFlow::Break((place, attrs, raw_arg_descs));
         }
@@ -452,9 +452,8 @@ impl Args for () {
 impl Sealed for () {}
 
 pub trait CommandInternal: Sized {
-    // This is stored as reference, since we always use it as a reference in
-    // reflection structure. There is no benefit to inline it.
-    const RAW_COMMAND_INFO: &'static RawCommandInfo;
+    const SUBCOMMANDS: &'static str = "";
+    const SUBCOMMAND_DOCS: &'static [&'static str] = &[];
 
     fn feed_subcommand(_name: &OsStr) -> FeedSubcommand<Self> {
         None

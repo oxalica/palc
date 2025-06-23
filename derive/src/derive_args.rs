@@ -10,7 +10,6 @@ use crate::common::{
     ArgOrCommand, ArgTyKind, ArgsCommandMeta, CommandMeta, Doc, ErrorCollector, FieldPath,
     Override, TY_OPTION, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
 };
-use crate::derive_subcommand::RawCommandInfo;
 use crate::shared::{AcceptHyphen, ArgAttrs};
 
 pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
@@ -86,16 +85,12 @@ impl ToTokens for ArgsImpl<'_> {
         let state = &self.state;
 
         if self.is_parser {
-            let raw_cmd_info = RawCommandInfo::Args { state_name: &self.state.state_name };
-
             tokens.extend(quote! {
                 #[automatically_derived]
                 impl __rt::Parser for #struct_name {}
 
                 #[automatically_derived]
                 impl __rt::CommandInternal for #struct_name {
-                    const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
-
                     fn feed_subcommand(_: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
                         __rt::Some(__rt::try_parse_state::<<Self as __rt::Args>::__State>)
                     }
@@ -1014,20 +1009,20 @@ struct RawArgsInfo<'a>(&'a ParserStateDefImpl<'a>);
 impl ToTokens for RawArgsInfo<'_> {
     // See format in `RawArgInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let raw_descs =
+        let arg_descs =
             self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
 
-        let mut raw_help_buf = String::new();
+        let mut arg_helps = String::new();
         for f in &self.0.fields {
             if !f.hide {
-                raw_help_buf.push(if f.attrs.required { '1' } else { '0' });
-                raw_help_buf.push_str(&f.doc.0);
+                arg_helps.push(if f.attrs.required { '1' } else { '0' });
+                arg_helps.push_str(&f.doc.0);
             }
-            raw_help_buf.push('\0');
+            arg_helps.push('\0');
         }
 
-        let (raw_descs, raw_helps) = if self.0.flatten_fields.is_empty() {
-            (quote!(#raw_descs), quote!(#raw_help_buf))
+        let (arg_descs, arg_helps) = if self.0.flatten_fields.is_empty() {
+            (quote!(#arg_descs), quote!(#arg_helps))
         } else {
             let tys1 = self.0.flatten_fields.iter().map(|f| f.effective_ty);
             let tys2 = tys1.clone();
@@ -1035,7 +1030,7 @@ impl ToTokens for RawArgsInfo<'_> {
             for ty in tys1.clone() {
                 asserts.extend(quote_spanned! {ty.span()=>
                     __rt::assert!(
-                        <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__subcommand.is_none(),
+                        <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__subcommands.is_empty(),
                         "cannot flatten an Args with subcommand",
                     );
                 });
@@ -1046,28 +1041,32 @@ impl ToTokens for RawArgsInfo<'_> {
                 quote! {{
                     #asserts
                     __rt::__const_concat!(
-                        #raw_descs,
-                        #(<<#tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_arg_descs,)*
+                        #arg_descs,
+                        #(<<#tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__arg_descs,)*
                     )
                 }},
                 quote! {
                     __rt::__const_concat!(
-                        #raw_help_buf,
-                        #(<<#tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_arg_helps,)*
+                        #arg_helps,
+                        #(<<#tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__arg_helps,)*
                     )
                 },
             )
         };
 
-        let (is_subcmd_optional, subcmd) = if let Some(s) = &self.0.subcommand {
+        let (is_subcmd_optional, subcmds, subcmd_docs) = if let Some(s) = &self.0.subcommand {
             let ty = &s.effective_ty;
-            (s.optional, quote! {__rt::Some(<#ty as __rt::CommandInternal>::RAW_COMMAND_INFO) })
+            (
+                s.optional,
+                quote! { <#ty as __rt::CommandInternal>::SUBCOMMANDS },
+                quote! { <#ty as __rt::CommandInternal>::SUBCOMMAND_DOCS },
+            )
         } else {
-            (false, quote! { __rt::None })
+            (false, quote! { "" }, quote! { &[] })
         };
         let subcmd_optional = if is_subcmd_optional { "1" } else { "0" };
 
-        let raw_meta = if let Some(m) = &self.0.cmd_meta {
+        let applet_doc = if let Some(m) = &self.0.cmd_meta {
             let name = match &m.name {
                 Some(s) => quote! { #s },
                 None => quote! { env!("CARGO_PKG_NAME") },
@@ -1075,11 +1074,6 @@ impl ToTokens for RawArgsInfo<'_> {
             let version = match &m.version {
                 Some(Override::Explicit(s)) => quote! { #s },
                 Some(Override::Inherit) => quote! { env!("CARGO_PKG_VERSION") },
-                None => quote! { "" },
-            };
-            let author = match &m.author {
-                Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => quote! { env!("CARGO_PKG_AUTHORS") },
                 None => quote! { "" },
             };
             // TODO: Compress this if it is the first line of `long_about`.
@@ -1105,7 +1099,6 @@ impl ToTokens for RawArgsInfo<'_> {
                     #subcmd_optional,
                     #name, "\0",
                     #version, "\0",
-                    #author, "\0",
                     #about, "\0",
                     #long_about, "\0",
                     #after_help, "\0",
@@ -1127,10 +1120,13 @@ impl ToTokens for RawArgsInfo<'_> {
                     #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_arg_cnt)*,
                 __total_unnamed_arg_cnt: #self_unnamed_arg_cnt
                     #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_unnamed_arg_cnt)*,
-                __subcommand: #subcmd,
-                __raw_arg_descs: #raw_descs,
-                __raw_arg_helps: __rt::__gate_help_str!(#raw_helps),
-                __raw_meta: __rt::__gate_help_str!(#raw_meta),
+
+                __subcommands: #subcmds,
+                __arg_descs: #arg_descs,
+
+                __subcommand_docs: __rt::__gate_help!(&[], #subcmd_docs),
+                __arg_helps: __rt::__gate_help!("", #arg_helps),
+                __applet_doc: __rt::__gate_help!("", #applet_doc),
             }
         });
     }

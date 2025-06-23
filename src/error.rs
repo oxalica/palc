@@ -274,7 +274,7 @@ impl ErrorKind {
     #[cold]
     pub(crate) fn with_arg_idx<S: ParserState>(self, arg_idx: u8) -> Error {
         Error::new(self).with_arg_desc(
-            RawArgsInfo::arg_descriptions_of(S::RAW_ARGS_INFO.__raw_arg_descs).nth(arg_idx.into()),
+            RawArgsInfo::arg_descriptions_of(S::RAW_ARGS_INFO.__arg_descs).nth(arg_idx.into()),
         )
     }
 }

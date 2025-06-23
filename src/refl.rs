@@ -1,5 +1,4 @@
-#![expect(dead_code, reason = "TODO: Decide whether to public these APIs")]
-// TODO: Better Debug impl for structs in this mod.
+#![allow(dead_code, reason = "TODO")]
 
 /// Description of a collection of arguments.
 ///
@@ -10,13 +9,16 @@ pub struct RawArgsInfo {
     pub __total_arg_cnt: u8,
     pub __total_unnamed_arg_cnt: u8,
 
-    /// Subcommand argument, if any.
-    pub __subcommand: Option<&'static RawCommandInfo>,
+    /// Zero or more `\0` terminated subcommand names.
+    pub __subcommands: &'static str,
 
     /// Zero or more '\0'-terminated arg descriptions.
     ///
     /// For named arguments, their descriptions always starts with "-".
-    pub __raw_arg_descs: &'static str,
+    pub __arg_descs: &'static str,
+
+    /// `__applet_doc` of each subcommands. Only used for help generation.
+    pub __subcommand_docs: &'static [&'static str],
 
     /// Zero or more '\0'-terminated arg help texts. Only used for help generation.
     ///
@@ -24,7 +26,7 @@ pub struct RawArgsInfo {
     /// of following strings in order:
     /// - `required as u8`.
     /// - Help text.
-    pub __raw_arg_helps: &'static str,
+    pub __arg_helps: &'static str,
 
     /// The first byte is '1' if there is an optional subcommand, otherwise '0'.
     ///
@@ -32,12 +34,11 @@ pub struct RawArgsInfo {
     /// in following order:
     /// - `name`
     /// - `version`
-    /// - `author`
     /// - `about`
     /// - `long_about`
     /// - `long_help`
     /// - `after_long_help`
-    pub __raw_meta: &'static str,
+    pub __applet_doc: &'static str,
 }
 
 impl RawArgsInfo {
@@ -46,10 +47,12 @@ impl RawArgsInfo {
         Self {
             __total_arg_cnt: 0,
             __total_unnamed_arg_cnt: 0,
-            __subcommand: None,
-            __raw_arg_descs: "",
-            __raw_arg_helps: "",
-            __raw_meta: "0",
+            __subcommands: "",
+            __arg_descs: "",
+
+            __subcommand_docs: &[],
+            __arg_helps: "",
+            __applet_doc: "",
         }
     }
 
@@ -61,66 +64,39 @@ impl RawArgsInfo {
         // See `RawArgsInfo`.
         split_terminator(arg_descs, b'\0')
     }
-}
 
-/// Description of a collection of arguments.
-#[derive(Debug, Clone, Copy)]
-pub struct ArgsInfo {
-    raw_arg_descs: &'static str,
-    raw_arg_helps: &'static str,
-    subcommand: Option<&'static RawCommandInfo>,
-    is_subcommand_optional: bool,
-    raw_doc: &'static str,
-}
-
-impl ArgsInfo {
-    pub(crate) fn from_raw(raw: RawArgsInfo) -> Self {
+    fn args(&self) -> impl Iterator<Item = ArgInfo> {
         // See `RawArgsInfo`.
-        let (fst, raw_doc) = raw.__raw_meta.split_at(1);
-        Self {
-            raw_arg_descs: raw.__raw_arg_descs,
-            raw_arg_helps: raw.__raw_arg_helps,
-            subcommand: raw.__subcommand,
-            is_subcommand_optional: fst == "1",
-            raw_doc,
-        }
-    }
-
-    pub fn args(&self) -> impl Iterator<Item = ArgInfo> {
-        // See `RawArgsInfo`.
-        split_terminator(self.raw_arg_descs, b'\0')
-            .zip(split_terminator(self.raw_arg_helps, b'\0'))
+        split_terminator(self.__arg_descs, b'\0')
+            .zip(split_terminator(self.__arg_helps, b'\0'))
             .filter_map(|(desc, raw_help)| ArgInfo::from_raw(desc, raw_help))
     }
 
-    pub fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
+    pub(crate) fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
         self.args().filter_map(ArgInfo::to_named)
     }
 
-    pub fn unnamed_args(&self) -> impl Iterator<Item = UnnamedArgInfo> {
+    pub(crate) fn unnamed_args(&self) -> impl Iterator<Item = UnnamedArgInfo> {
         self.args().filter_map(ArgInfo::to_unnamed)
     }
 
-    pub fn subcommand(&self) -> Option<SubcommandInfo> {
-        self.subcommand.map(SubcommandInfo::from_raw)
+    pub(crate) fn subcommands(&self) -> impl Iterator<Item = (&'static str, AppletDoc)> {
+        split_terminator(self.__subcommands, b'\0')
+            .zip(self.__subcommand_docs.iter().filter_map(|doc| AppletDoc::from_raw(doc)))
     }
 
-    pub fn is_subcommand_optional(&self) -> bool {
-        self.is_subcommand_optional
+    pub(crate) fn is_subcommand_optional(&self) -> bool {
+        self.__applet_doc.as_bytes().first() == Some(&b'1')
     }
 
-    #[inline(never)]
-    pub fn doc(&self) -> Option<CommandDoc> {
-        // See `RawArgsInfo`.
-        let [name, version, author, about, long_about, after_help, after_long_help] =
-            split_sep_many(self.raw_doc, b'\0')?;
-        Some(CommandDoc { name, version, author, about, long_about, after_help, after_long_help })
+    pub(crate) fn doc(&self) -> Option<AppletDoc> {
+        AppletDoc::from_raw(self.__applet_doc)
     }
 }
 
 /// Description of an arguments.
 #[derive(Debug, Clone, Copy)]
-pub enum ArgInfo {
+enum ArgInfo {
     Named(NamedArgInfo),
     Unnamed(UnnamedArgInfo),
 }
@@ -135,24 +111,17 @@ impl ArgInfo {
             Some(if description.starts_with('-') {
                 Self::Named(NamedArgInfo { description, required, long_help })
             } else {
-                Self::Unnamed(UnnamedArgInfo { description, required, long_help })
+                Self::Unnamed(UnnamedArgInfo { description, long_help })
             })
         })()
     }
 
-    pub fn to_named(self) -> Option<NamedArgInfo> {
+    fn to_named(self) -> Option<NamedArgInfo> {
         if let Self::Named(v) = self { Some(v) } else { None }
     }
 
-    pub fn to_unnamed(self) -> Option<UnnamedArgInfo> {
+    fn to_unnamed(self) -> Option<UnnamedArgInfo> {
         if let Self::Unnamed(v) = self { Some(v) } else { None }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            ArgInfo::Named(arg) => arg.description(),
-            ArgInfo::Unnamed(arg) => arg.description(),
-        }
     }
 }
 
@@ -182,7 +151,6 @@ impl NamedArgInfo {
 #[derive(Debug, Clone, Copy)]
 pub struct UnnamedArgInfo {
     description: &'static str,
-    required: bool,
     long_help: &'static str,
 }
 
@@ -191,102 +159,37 @@ impl UnnamedArgInfo {
         self.description
     }
 
-    pub fn required(&self) -> bool {
-        self.required
-    }
-
     pub fn long_help(&self) -> Option<&'static str> {
         opt(self.long_help)
     }
 }
 
-/// NB. This struct is constructed by proc-macro.
-///
-/// - For regular `derive(Subcommand)` enums, `__raw_names` has the same number
-///   of names as `__subcommands`.
-/// - For `derive(Parser)` structs, `__raw_names` is empty and `__subcommands`
-///   has exactly one element. Note that in this case, this struct cannot be
-///   used as a subcommand of other `derive(Args)` structs.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy)]
-pub struct RawCommandInfo {
-    /// '\t'-terminated subcommand names.
-    pub __raw_names: &'static str,
-    /// Argument of each subcommand.
-    pub __subcommands: &'static [RawArgsInfo],
-}
-
-impl RawCommandInfo {
-    // NB. Used by proc-macro.
-    pub const fn empty() -> Self {
-        Self { __raw_names: "", __subcommands: &[] }
-    }
-
-    // pub(crate) fn find_subcommand(&self)
-}
-
-/// Description of a command applet.
-#[derive(Debug, Clone, Copy)]
-pub enum CommandInfo {
-    /// A top-level program-name-agnostic `Parser` struct.
-    RootArgs(ArgsInfo),
-    Subcommand(SubcommandInfo),
-}
-
-impl CommandInfo {
-    pub(crate) fn from_raw(raw: &'static RawCommandInfo) -> Self {
-        if raw.__raw_names.is_empty() {
-            Self::RootArgs(ArgsInfo::from_raw(raw.__subcommands[0]))
-        } else {
-            Self::Subcommand(SubcommandInfo::from_raw(raw))
-        }
-    }
-}
-
-/// Description of a subcommand enum.
-#[derive(Debug, Clone, Copy)]
-pub struct SubcommandInfo(&'static RawCommandInfo);
-
-impl SubcommandInfo {
-    pub(crate) fn from_raw(raw: &'static RawCommandInfo) -> Self {
-        Self(raw)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&'static str, ArgsInfo)> {
-        std::iter::zip(
-            split_terminator(self.0.__raw_names, b'\t'),
-            self.0.__subcommands.iter().map(|args| ArgsInfo::from_raw(*args)),
-        )
-    }
-
-    pub fn get(&self, subcmd: &str) -> Option<ArgsInfo> {
-        Some(self.iter().find(|(name, _)| *name == subcmd)?.1)
-    }
-}
-
 /// Help and documentation of a command applet.
 #[derive(Debug, Clone, Copy)]
-pub struct CommandDoc {
+pub struct AppletDoc {
     name: &'static str,
     version: &'static str,
-    author: &'static str,
     about: &'static str,
     long_about: &'static str,
     after_help: &'static str,
     after_long_help: &'static str,
 }
 
-impl CommandDoc {
+impl AppletDoc {
+    #[inline(never)]
+    fn from_raw(raw: &'static str) -> Option<Self> {
+        // See `RawArgsInfo`.
+        let [name, version, about, long_about, after_help, after_long_help] =
+            split_sep_many(raw.get(1..)?, b'\0')?;
+        Some(AppletDoc { name, version, about, long_about, after_help, after_long_help })
+    }
+
     pub fn name(&self) -> &str {
         self.name
     }
 
     pub fn version(&self) -> Option<&str> {
         opt(self.version)
-    }
-
-    pub fn author(&self) -> Option<&str> {
-        opt(self.author)
     }
 
     pub fn about(&self) -> Option<&str> {

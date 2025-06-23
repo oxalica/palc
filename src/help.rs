@@ -1,14 +1,14 @@
-use crate::{refl::ArgsInfo, runtime::ParserChainNode};
+use crate::{refl::RawArgsInfo, runtime::ParserChainNode};
 
 #[inline(never)]
 fn push_str(out: &mut String, s: &str) {
     out.push_str(s);
 }
 
-fn collect_subcmds(out: &mut Vec<(String, ArgsInfo)>, chain: ParserChainNode) {
-    let (_, raw_info) = chain.state.metadata();
+fn collect_subcmds(out: &mut Vec<(String, RawArgsInfo)>, chain: ParserChainNode) {
+    let (_, info) = chain.state.metadata();
     let cmd_name = chain.cmd_name.to_string_lossy().into_owned();
-    out.push((cmd_name, ArgsInfo::from_raw(raw_info)));
+    out.push((cmd_name, info));
     if let Some(deep) = chain.ancestors.out() {
         collect_subcmds(out, deep);
     }
@@ -77,19 +77,29 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         has_unnamed = true;
         w!(" ", arg.description());
     }
-    let subcmd = info.subcommand();
-    if subcmd.is_some() {
+    let has_subcmd = info.subcommands().next().is_some();
+    if has_subcmd {
         w!(if info.is_subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" });
     }
     w!("\n");
 
     // List of commands.
 
-    if let Some(subcmd) = &subcmd {
+    if has_subcmd {
         w!("\nCommands:\n");
-        for (cmd, _) in subcmd.iter() {
-            // TODO: Description.
-            w!("    ", cmd, "\n");
+        let pad = "                        ";
+        let max_len = info.subcommands().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
+
+        // Note: Only short help is displayed for the subcommand list.
+        for (cmd, doc) in info.subcommands() {
+            w!("    ", cmd);
+            if let Some(help) = doc.long_about() {
+                let short_help = help.split_terminator('\n').next().unwrap_or(help);
+                let pad_len = max_len.saturating_sub(cmd.len()) + 2;
+                let pad = &pad[..pad.len().min(pad_len)];
+                w!("", pad, short_help);
+            }
+            w!("\n");
         }
     }
 
