@@ -6,9 +6,6 @@
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
 pub struct RawArgsInfo {
-    pub __total_arg_cnt: u8,
-    pub __total_unnamed_arg_cnt: u8,
-
     /// Zero or more `\0` terminated subcommand names.
     pub __subcommands: &'static str,
 
@@ -45,8 +42,6 @@ impl RawArgsInfo {
     // NB. Used by proc-macro.
     pub const fn empty() -> Self {
         Self {
-            __total_arg_cnt: 0,
-            __total_unnamed_arg_cnt: 0,
             __subcommands: "",
             __arg_descs: "",
 

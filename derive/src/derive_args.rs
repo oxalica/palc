@@ -693,6 +693,11 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
         let raw_args_info = RawArgsInfo(self);
 
+        let self_arg_cnt = self.fields.len() as u8;
+        let self_unnamed_arg_cnt = self.unnamed_fields.len() as u8;
+        let flatten_tys1 = self.flatten_fields.iter().map(|f| f.effective_ty);
+        let flatten_tys2 = flatten_tys1.clone();
+
         tokens.extend(quote! {
             #vis struct #state_name {
                 #(#field_names : #field_tys,)*
@@ -703,6 +708,11 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 type Output = #output_ty;
 
                 const RAW_ARGS_INFO: __rt::RawArgsInfo = #raw_args_info;
+
+                const TOTAL_ARG_CNT: __rt::u8 = #self_arg_cnt
+                    #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*;
+                const TOTAL_UNNAMED_ARG_CNT: __rt::u8 = #self_unnamed_arg_cnt
+                    #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
                 #[allow(clippy::unnecessary_lazy_evaluations)]
                 fn init() -> Self {
@@ -779,7 +789,7 @@ impl ToTokens for FeedNamedImpl<'_> {
                     let prefix_tys = def.flatten_fields[..i].iter().map(|f| f.effective_ty);
                     quote! {
                         #self_field_cnt
-                        #( + <<#prefix_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_arg_cnt)*
+                        #( + <<#prefix_tys as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*
                     }
                 });
             quote! {
@@ -830,7 +840,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             .map(|FlattenFieldInfo { effective_ty, .. }| quote_spanned! {effective_ty.span()=>
                 const {
                     __rt::assert!(
-                        <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_unnamed_arg_cnt == 0,
+                        <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
                         "TODO: cannot arg(flatten) positional arguments yet",
                     );
                 }
@@ -1109,18 +1119,8 @@ impl ToTokens for RawArgsInfo<'_> {
             quote! { "0" }
         };
 
-        let self_arg_cnt = self.0.fields.len() as u8;
-        let self_unnamed_arg_cnt = self.0.unnamed_fields.len() as u8;
-        let flatten_tys1 = self.0.flatten_fields.iter().map(|f| f.effective_ty);
-        let flatten_tys2 = flatten_tys1.clone();
-
         tokens.extend(quote! {
             __rt::RawArgsInfo {
-                __total_arg_cnt: #self_arg_cnt
-                    #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_arg_cnt)*,
-                __total_unnamed_arg_cnt: #self_unnamed_arg_cnt
-                    #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_unnamed_arg_cnt)*,
-
                 __subcommands: #subcmds,
                 __arg_descs: #arg_descs,
 

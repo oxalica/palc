@@ -100,6 +100,8 @@ impl<T: 'static> ParserState for FallbackState<T> {
     type Output = T;
 
     const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
+    const TOTAL_ARG_CNT: u8 = 0;
+    const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
 
     fn init() -> Self {
         unimplemented!()
@@ -377,6 +379,9 @@ pub trait ParserState: ParserStateDyn {
     // This is stored by-value, because we only want to promote it to
     // `&'static [RawArgsInfo]` after processing all `command(flatten)`.
     const RAW_ARGS_INFO: RawArgsInfo;
+
+    const TOTAL_ARG_CNT: u8 = 0;
+    const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
 
     fn init() -> Self;
     fn finish(&mut self) -> Result<Self::Output>;
