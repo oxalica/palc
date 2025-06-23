@@ -1,34 +1,40 @@
-use crate::{
-    refl::{CommandInfo, RawCommandInfo},
-    runtime::CommandInternal,
-};
-
-/// List of (arg_info, subcommand) context, in reverse order.
-/// The last element (outermost command) is the top-level command.
-pub(crate) type SubcommandPath = Vec<SubcommandPathFrag>;
-pub(crate) type SubcommandPathFrag = (&'static RawCommandInfo, String);
+use crate::{refl::ArgsInfo, runtime::ParserChainNode};
 
 #[inline(never)]
 fn push_str(out: &mut String, s: &str) {
     out.push_str(s);
 }
 
+fn collect_subcmds(out: &mut Vec<(String, ArgsInfo)>, chain: ParserChainNode) {
+    let (_, raw_info) = chain.state.metadata();
+    let cmd_name = chain.cmd_name.to_string_lossy().into_owned();
+    out.push((cmd_name, ArgsInfo::from_raw(raw_info)));
+    if let Some(deep) = chain.ancestors.out() {
+        collect_subcmds(out, deep);
+    }
+}
+
 #[cold]
-pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]) {
+pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
     macro_rules! w {
         ($($e:expr),*) => {{
             $(push_str(out, $e);)*
         }};
     }
 
-    let path = rev_path
-        .iter()
-        .rev()
-        .filter_map(|(raw, cmd)| match CommandInfo::from_raw(raw) {
-            CommandInfo::RootArgs(args) => Some((cmd.as_str(), args)),
-            CommandInfo::Subcommand(subcmds) => Some((cmd, subcmds.get(cmd)?)),
-        })
-        .collect::<Vec<_>>();
+    let path = {
+        let mut path = Vec::with_capacity(8);
+        collect_subcmds(
+            &mut path,
+            ParserChainNode {
+                cmd_name: chain.cmd_name,
+                state: chain.state,
+                ancestors: chain.ancestors,
+            },
+        );
+        path.reverse();
+        path
+    };
 
     // There must be at least a top-level `Parser` info, or we would fail fast by `MissingArg0`.
     assert!(!path.is_empty());
@@ -50,6 +56,7 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]
     }
 
     let mut has_named @ mut has_opt_named @ mut has_unnamed = false;
+    // TODO: Global args.
     for arg in info.named_args() {
         has_named = true;
         if arg.required() {
@@ -132,10 +139,4 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]
     if let Some(after) = cmd_doc.after_long_help() {
         w!(after);
     }
-}
-
-pub(crate) fn render_help_for<C: CommandInternal>(argv0: impl Into<String>) -> String {
-    let mut out = String::new();
-    render_help_into(&mut out, &[(C::RAW_COMMAND_INFO, argv0.into())]);
-    out
 }

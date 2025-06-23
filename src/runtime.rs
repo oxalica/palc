@@ -249,28 +249,40 @@ pub fn place_for_set_opt_value<T, A: ArgValueInfo<T>>(
     Place::<T, A>::ref_cast_mut(place)
 }
 
-pub type GlobalAncestors<'a> = &'a mut dyn GlobalChain;
+/// The singly linked list for states of ancestor subcommands. Deeper states come first.
+/// `ancestors` are made into trait object for lifetime erasure, or it won't compile.
+pub(crate) struct ParserChainNode<'a, 'b, 'c> {
+    pub cmd_name: &'a OsStr,
+    pub state: &'b mut dyn ParserStateDyn,
+    pub ancestors: &'c mut dyn ParserChain,
+}
 
-/// The singly linked list for states of ancestor subcommands that accept any global arguments.
-/// Deeper states come first.
-/// It behaves like:
-/// `struct Node<'_> { node: &'_ mut dyn ParserStateDyn, parent: Option<&'_ mut Node<'_>> }`
-/// except lifetimes do not work without type erasure (`dyn`).
-pub trait GlobalChain {
-    fn search_global_named(&mut self, _enc_name: &str) -> GlobalFeedNamed<'_> {
-        ControlFlow::Continue(())
+pub trait ParserChain {
+    #[expect(private_interfaces, reason = "not used by proc-macro")]
+    fn out(&mut self) -> Option<ParserChainNode> {
+        None
     }
 }
 
-impl GlobalChain for () {}
-impl<S: ParserState> GlobalChain for (&mut S, &mut dyn GlobalChain) {
-    fn search_global_named(&mut self, enc_name: &str) -> GlobalFeedNamed<'_> {
-        match self.0.feed_named(enc_name) {
-            ControlFlow::Break((place, attrs)) if attrs.global => {
-                ControlFlow::Break((place, attrs, S::RAW_ARGS_INFO.__raw_arg_descs))
-            }
-            _ => self.1.search_global_named(enc_name),
+impl dyn ParserChain + '_ {
+    fn feed_named(&mut self, enc_name: &str) -> GlobalFeedNamed<'_> {
+        let Some(node) = self.out() else { return ControlFlow::Continue(()) };
+        let raw_arg_descs = node.state.metadata().1.__raw_arg_descs;
+        if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name) {
+            return ControlFlow::Break((place, attrs, raw_arg_descs));
         }
+        node.ancestors.feed_named(enc_name)
+    }
+}
+
+impl ParserChain for () {}
+
+// TODO: De-virtualize this.
+impl ParserChain for ParserChainNode<'_, '_, '_> {
+    fn out(&mut self) -> Option<ParserChainNode> {
+        // Reborrow fields.
+        let ParserChainNode { cmd_name, state, ancestors } = self;
+        Some(ParserChainNode { cmd_name, state: &mut **state, ancestors: &mut **ancestors })
     }
 }
 
@@ -283,7 +295,11 @@ pub trait GreedyArgsPlace {
         &mut self,
         arg: OsString,
         args: &mut ArgsIter<'_>,
-        global: GlobalAncestors<'_>,
+        // NB. Since `self` borrows the state, we cannot pass the whole
+        // `ParserChain` which overlaps with `self`'s lifetime.
+        // Here we destruct and pass the rest fields of the outmost node.
+        cur_cmd_name: &OsStr,
+        ancestors: &mut dyn ParserChain,
     ) -> Result<()>;
 }
 
@@ -300,7 +316,8 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
             &mut self,
             mut arg: OsString,
             args: &mut ArgsIter<'_>,
-            _global: GlobalAncestors<'_>,
+            _cur_cmd_name: &OsStr,
+            _ancestors: &mut dyn ParserChain,
         ) -> Result<()> {
             let v = self.0.get_or_insert_default();
             if let Some(high) = args.iter.size_hint().1 {
@@ -319,32 +336,29 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
     Ok(Some(Place::<T, A>::ref_cast_mut(place)))
 }
 
-pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
-    state: &mut G::State,
-) -> FeedUnnamed<'_> {
+pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnamed<'_> {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(G::State);
+    struct Place<G: GetSubcommand>(G::State);
 
-    impl<G: GetSubcommand, const CUR_HAS_GLOBAL: bool> GreedyArgsPlace for Place<G, CUR_HAS_GLOBAL> {
+    impl<G: GetSubcommand> GreedyArgsPlace for Place<G> {
         fn feed_greedy(
             &mut self,
             name: OsString,
             args: &mut ArgsIter<'_>,
-            global: GlobalAncestors<'_>,
+            cur_cmd_name: &OsStr,
+            ancestors: &mut dyn ParserChain,
         ) -> Result<()> {
-            let global = if CUR_HAS_GLOBAL {
-                &mut (&mut self.0, global) as &mut dyn GlobalChain
-            } else {
-                global
-            };
-            let subcmd = G::Subcommand::try_parse_with_name(name, args, global)?;
+            // Recombine the state chain with the current state.
+            let states =
+                &mut ParserChainNode { cmd_name: cur_cmd_name, state: &mut self.0, ancestors };
+            let subcmd = G::Subcommand::try_parse_with_name(args, &name, states)?;
             *G::get(&mut self.0) = Some(subcmd);
             Ok(())
         }
     }
 
-    Ok(Some(Place::<G, CUR_HAS_GLOBAL>::ref_cast_mut(state)))
+    Ok(Some(Place::<G>::ref_cast_mut(state)))
 }
 
 /// Break on a resolved place. Continue on unknown names.
@@ -352,7 +366,7 @@ pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
 pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs)>;
 
 /// Additionally include the original raw arg descriptions for error messages.
-pub type GlobalFeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs, &'static str)>;
+type GlobalFeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs, &'static str)>;
 
 /// This should be an enum, but be this for `?` support, which is unstable to impl.
 pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Error>>;
@@ -407,9 +421,10 @@ pub trait ParserStateDyn: 'static {
         Err(None)
     }
 
-    /// If unknown hyphen-started arguments should be treated as unnamed arguments?
-    fn unnamed_arg_accept_hyphen(&self) -> AcceptHyphen {
-        AcceptHyphen::No
+    /// -> (unnamed_accept_hyphen, raw_arg_descs)
+    // FIXME: This interface is ugly and forces `RAW_ARGS_INFO` into rodata.
+    fn metadata(&self) -> (AcceptHyphen, RawArgsInfo) {
+        (AcceptHyphen::No, RawArgsInfo::empty())
     }
 }
 
@@ -436,16 +451,6 @@ impl Args for () {
 }
 impl Sealed for () {}
 
-/// The parser fn signature that matches [`try_parse_args`].
-type ArgsParserFn<T> = fn(args: &mut ArgsIter<'_>, global: GlobalAncestors<'_>) -> Result<T>;
-
-#[cfg(test)]
-fn _assert_args_fn_sig<A: Args>() -> ArgsParserFn<A> {
-    try_parse_args::<A>
-}
-
-pub type FeedSubcommand<T> = Option<ArgsParserFn<T>>;
-
 pub trait CommandInternal: Sized {
     // This is stored as reference, since we always use it as a reference in
     // reflection structure. There is no benefit to inline it.
@@ -456,72 +461,60 @@ pub trait CommandInternal: Sized {
     }
 
     fn try_parse_with_name(
-        name: OsString,
         args: &mut ArgsIter<'_>,
-        global: GlobalAncestors<'_>,
+        name: &OsStr,
+        states: &mut dyn ParserChain,
     ) -> Result<Self> {
-        let Some(f) = Self::feed_subcommand(&name) else {
-            return unknown_subcommand(&name);
+        let Some(f) = Self::feed_subcommand(name) else {
+            return unknown_subcommand(name);
         };
-        // There is a matching subcommand, thus `name` must be UTF-8.
-        f(args, global).map_err(|err| err.in_subcommand::<Self>(name.into_string().unwrap()))
+        f(args, name, states)
     }
 }
 
-pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>, global: GlobalAncestors<'_>) -> Result<A> {
-    try_parse_state::<A::__State>(args, global)
+/// The fn signature of [`try_parse_state`], returned by [`CommandInternal::feed_subcommand`].
+pub type FeedSubcommand<T> =
+    Option<fn(args: &mut ArgsIter<'_>, subcmd: &OsStr, states: &mut dyn ParserChain) -> Result<T>>;
+
+#[cfg(test)]
+fn _assert_feed_subcommand_ty<S: ParserState>() -> FeedSubcommand<S::Output> {
+    Some(try_parse_state::<S>)
 }
 
 pub fn try_parse_state<S: ParserState>(
     args: &mut ArgsIter<'_>,
-    global: GlobalAncestors<'_>,
+    cmd_name: &OsStr,
+    ancestors: &mut dyn ParserChain,
 ) -> Result<S::Output> {
     let mut state = S::init();
-    try_parse_with_state(&mut state, args, global, S::RAW_ARGS_INFO.__raw_arg_descs)?;
+    let node = &mut ParserChainNode { cmd_name, state: &mut state, ancestors };
+    try_parse_state_dyn(args, node)?;
     state.finish()
 }
 
+/// The outlined main logic of parser.
 #[inline(never)]
-pub fn try_parse_with_state(
-    state: &mut dyn ParserStateDyn,
-    args: &mut ArgsIter<'_>,
-    global: GlobalAncestors<'_>,
-    raw_arg_descs: &'static str,
-) -> Result<()> {
-    let named_arg_fallback = state.unnamed_arg_accept_hyphen();
-
-    let mut idx = 0usize;
+fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> Result<()> {
     let mut buf = OsString::new();
+
+    let mut unnamed_idx = 0usize;
+
     while let Some(arg) = args.next_arg(&mut buf)? {
         match arg {
-            Arg::DashDash => {
-                drop(arg);
-                for mut arg in &mut args.iter {
-                    match state.feed_unnamed(&mut arg, idx, true) {
-                        Ok(None) => idx += 1,
-                        Ok(Some(place)) => {
-                            return place.feed_greedy(arg, args, global);
-                        }
-                        Err(Some(err)) => return Err(err),
-                        Err(None) => return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg)),
-                    }
-                }
-                return Ok(());
-            }
             Arg::EncodedNamed(enc_name, has_eq, value) => {
-                let (place, attrs, raw_arg_descs) = match state.feed_named(enc_name) {
-                    ControlFlow::Break((place, attrs)) => (place, attrs, raw_arg_descs),
-                    ControlFlow::Continue(()) => match global.search_global_named(enc_name) {
-                        ControlFlow::Break(found) => found,
+                let (place, attrs, raw_arg_descs) =
+                    match <dyn ParserChain>::feed_named(chain, enc_name) {
+                        ControlFlow::Break(ret) => ret,
                         ControlFlow::Continue(()) => {
-                            if named_arg_fallback != AcceptHyphen::No {
+                            let (unnamed_accept_hyphen, _) = chain.state.metadata();
+                            if unnamed_accept_hyphen != AcceptHyphen::No {
                                 todo!()
                             }
 
                             // TODO: Configurable help?
                             #[cfg(feature = "help")]
                             if enc_name == "h" || enc_name == "help" {
-                                return Err(ErrorKind::Help.into());
+                                return Err(Error::from(ErrorKind::Help).maybe_render_help(chain));
                             }
                             let mut dec_name = String::with_capacity(2 + enc_name.len());
                             // TODO: Dedup this code with `Error::fmt`.
@@ -533,8 +526,7 @@ pub fn try_parse_with_state(
                             dec_name.push_str(enc_name);
                             return Err(ErrorKind::UnknownNamedArgument.with_input(dec_name.into()));
                         }
-                    },
-                };
+                    };
 
                 if attrs.num_values == 0 {
                     // Only fail on long arguments with inlined values `--long=value`.
@@ -563,16 +555,33 @@ pub fn try_parse_with_state(
                     |err| {
                         let desc =
                             RawArgsInfo::arg_descriptions_of(raw_arg_descs).nth(attrs.index.into());
-                        err.with_arg_desc(desc)
+                        err.with_arg_desc(desc).maybe_render_help(chain)
                     },
                 )?;
             }
-            Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, idx, false) {
-                Ok(None) => idx += 1,
-                Ok(Some(place)) => return place.feed_greedy(arg, args, global),
+            Arg::Unnamed(mut arg) => match chain.state.feed_unnamed(&mut arg, unnamed_idx, false) {
+                Ok(None) => unnamed_idx += 1,
+                Ok(Some(place)) => {
+                    return place.feed_greedy(arg, args, chain.cmd_name, chain.ancestors);
+                }
                 Err(Some(err)) => return Err(err),
                 Err(None) => return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg)),
             },
+            Arg::DashDash => {
+                drop(arg);
+                drop(buf);
+                for mut arg in &mut args.iter {
+                    match chain.state.feed_unnamed(&mut arg, unnamed_idx, true) {
+                        Ok(None) => unnamed_idx += 1,
+                        Ok(Some(place)) => {
+                            return place.feed_greedy(arg, args, chain.cmd_name, chain.ancestors);
+                        }
+                        Err(Some(err)) => return Err(err),
+                        Err(None) => return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg)),
+                    }
+                }
+                return Ok(());
+            }
         }
     }
     Ok(())

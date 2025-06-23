@@ -5,7 +5,7 @@
 ///
 /// NB. This struct is constructed by proc-macro.
 #[doc(hidden)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct RawArgsInfo {
     pub __total_arg_cnt: u8,
     pub __total_unnamed_arg_cnt: u8,
@@ -74,7 +74,7 @@ pub struct ArgsInfo {
 }
 
 impl ArgsInfo {
-    fn from_raw(raw: &'static RawArgsInfo) -> Self {
+    pub(crate) fn from_raw(raw: RawArgsInfo) -> Self {
         // See `RawArgsInfo`.
         let (fst, raw_doc) = raw.__raw_meta.split_at(1);
         Self {
@@ -236,7 +236,7 @@ pub enum CommandInfo {
 impl CommandInfo {
     pub(crate) fn from_raw(raw: &'static RawCommandInfo) -> Self {
         if raw.__raw_names.is_empty() {
-            Self::RootArgs(ArgsInfo::from_raw(&raw.__subcommands[0]))
+            Self::RootArgs(ArgsInfo::from_raw(raw.__subcommands[0]))
         } else {
             Self::Subcommand(SubcommandInfo::from_raw(raw))
         }
@@ -255,7 +255,7 @@ impl SubcommandInfo {
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, ArgsInfo)> {
         std::iter::zip(
             split_terminator(self.0.__raw_names, b'\t'),
-            self.0.__subcommands.iter().map(ArgsInfo::from_raw),
+            self.0.__subcommands.iter().map(|args| ArgsInfo::from_raw(*args)),
         )
     }
 

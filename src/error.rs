@@ -1,9 +1,13 @@
+#![cfg_attr(
+    not(feature = "default"),
+    allow(dead_code, reason = "help generation code can be unused")
+)]
 use std::ffi::OsString;
 use std::fmt;
 
 use crate::{
     refl::RawArgsInfo,
-    runtime::{CommandInternal, ParserState},
+    runtime::{ParserChainNode, ParserState},
 };
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
@@ -33,11 +37,11 @@ struct Inner {
     /// Possible value strings, terminated by NUL.
     possible_inputs_nul: Option<&'static str>,
 
-    #[cfg(feature = "help")]
-    subcommand_path: crate::help::SubcommandPath,
+    /// Rendered help message.
+    help: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorKind {
     // Input parsing errors.
     MissingArg0,
@@ -59,7 +63,6 @@ pub(crate) enum ErrorKind {
     ConstraintConflict,
 
     // Not really an error, but for bubbling out.
-    #[cfg(feature = "help")]
     Help,
 
     // User errors.
@@ -79,12 +82,8 @@ impl fmt::Debug for Error {
         s.field("kind", &e.kind)
             .field("arg_desc", &e.arg_desc)
             .field("input", &e.input)
-            .field("source", &e.source);
-        #[cfg(feature = "help")]
-        {
-            let subcmds = e.subcommand_path.iter().rev().map(|(_, cmd)| cmd).collect::<Vec<_>>();
-            s.field("subcommand_path", &subcmds);
-        }
+            .field("source", &e.source)
+            .field("help", &e.help);
         s.finish_non_exhaustive()
     }
 }
@@ -195,12 +194,7 @@ impl fmt::Display for Error {
                 f.write_str(" cannot be used with some other arguments")
             }
 
-            #[cfg(feature = "help")]
-            ErrorKind::Help => {
-                let mut out = String::new();
-                crate::help::render_help_into(&mut out, &e.subcommand_path);
-                f.write_str(&out)
-            }
+            ErrorKind::Help => f.write_str(e.help.as_deref().unwrap_or("help is not available")),
 
             ErrorKind::Custom => self.0.source.as_ref().unwrap().fmt(f),
         }
@@ -215,8 +209,7 @@ impl Error {
             input: None,
             source: None,
             possible_inputs_nul: None,
-            #[cfg(feature = "help")]
-            subcommand_path: Vec::new(),
+            help: None,
         }))
     }
 
@@ -226,6 +219,10 @@ impl Error {
         let mut e = Self::new(ErrorKind::Custom);
         e.0.source = Some(source);
         e
+    }
+
+    pub(crate) fn into_help(self) -> Option<String> {
+        self.0.help
     }
 
     pub(crate) fn with_source(mut self, source: DynStdError) -> Self {
@@ -244,14 +241,17 @@ impl Error {
         self
     }
 
-    #[cfg(feature = "help")]
-    pub(crate) fn in_subcommand<C: CommandInternal>(mut self, subcmd: String) -> Self {
-        self.0.subcommand_path.push((C::RAW_COMMAND_INFO, subcmd));
+    #[cfg(not(feature = "help"))]
+    pub(crate) fn maybe_render_help(self, _chain: &mut ParserChainNode) -> Self {
         self
     }
 
-    #[cfg(not(feature = "help"))]
-    pub(crate) fn in_subcommand<S: CommandInternal>(self, _subcmd: String) -> Self {
+    #[cfg(feature = "help")]
+    pub(crate) fn maybe_render_help(mut self, chain: &mut ParserChainNode) -> Self {
+        if self.0.kind == ErrorKind::Help {
+            let out = self.0.help.insert(String::new());
+            crate::help::render_help_into(out, chain);
+        }
         self
     }
 }

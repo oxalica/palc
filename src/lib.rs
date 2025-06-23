@@ -28,7 +28,7 @@ mod help;
 pub use palc_derive::{Args, Parser, Subcommand, ValueEnum};
 
 pub use crate::error::Error;
-use crate::runtime::Sealed;
+use crate::runtime::{ParserChain, Sealed};
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Not public API. Only for proc-macro internal use.
@@ -84,7 +84,11 @@ pub trait Parser: Sized + CommandInternal + Sealed + 'static {
 
     #[cfg(feature = "help")]
     fn render_long_help(argv0: impl Into<String>) -> String {
-        help::render_help_for::<Self>(argv0)
+        Self::try_parse_from([argv0.into().into(), OsString::from("--help")])
+            .err()
+            .unwrap()
+            .into_help()
+            .unwrap()
     }
 }
 
@@ -93,9 +97,10 @@ fn try_parse_from_command<C: CommandInternal>(
 ) -> Result<C> {
     let arg0 = PathBuf::from(iter.next().ok_or(ErrorKind::MissingArg0)?);
     // A non-UTF8 program name does not matter in help. Multi-call commands will fail anyway.
-    let program_name = arg0.file_name().unwrap_or(arg0.as_ref()).to_owned();
-    let mut args = ArgsIter::new(iter);
-    CommandInternal::try_parse_with_name(program_name, &mut args, &mut ())
+    let program_name = arg0.file_name().unwrap_or(arg0.as_ref());
+    let args = &mut ArgsIter::new(iter);
+    let states: &mut dyn ParserChain = &mut ();
+    CommandInternal::try_parse_with_name(args, program_name, states)
 }
 
 /// A group of arguments for composing larger interface.

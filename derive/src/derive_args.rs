@@ -97,7 +97,7 @@ impl ToTokens for ArgsImpl<'_> {
                     const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
 
                     fn feed_subcommand(_: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
-                        __rt::Some(__rt::try_parse_args::<Self>)
+                        __rt::Some(__rt::try_parse_state::<<Self as __rt::Args>::__State>)
                     }
                 }
             });
@@ -729,8 +729,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 #feed_named_func
                 #feed_unnamed_func
 
-                fn unnamed_arg_accept_hyphen(&self) -> __rt::AcceptHyphen {
-                    #unnamed_arg_accept_hyphen
+                fn metadata(&self) -> (__rt::AcceptHyphen, __rt::RawArgsInfo) {
+                    (#unnamed_arg_accept_hyphen, <Self as __rt::ParserState>::RAW_ARGS_INFO)
                 }
             }
         });
@@ -842,7 +842,6 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             })
             .collect::<TokenStream>();
 
-        let has_global = def.named_fields.iter().any(|&i| def.fields[i].attrs.global);
         let handle_subcmd = if let Some(SubcommandInfo { ident, effective_ty, .. }) =
             &def.subcommand
         {
@@ -861,7 +860,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 if !__is_last
                     && <#effective_ty as __rt::CommandInternal>::feed_subcommand(__arg.as_os_str()).is_some()
                 {
-                    return __rt::place_for_subcommand::<__Subcommand, #has_global>(self);
+                    return __rt::place_for_subcommand::<__Subcommand>(self);
                 }
             }
         } else {
@@ -888,7 +887,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             }
         } else if def.subcommand.is_some() {
             // Prefer to report "unknown subcommand" error for extra unnamed arguments.
-            quote! { __rt::place_for_subcommand::<__Subcommand, #has_global>(self) }
+            quote! { __rt::place_for_subcommand::<__Subcommand>(self) }
         } else {
             quote! { __rt::Err(__rt::None) }
         };
