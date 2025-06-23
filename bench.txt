@@ -1,5 +1,5 @@
 # Runs on AMD Ryzen 7 5700G, x86_64-linux. Your result may vary.
-# Commit: cb489a5d082d857206042b7997568954ed0de16e
+# Commit: 4faadea2fabf59bdb1ac416a13258db45a2e322d
 
 # FIXME: Results of no-default-features are only meaningful with *-palc,
 # clap&argh always have default features enabled, because we cannot fine-control
@@ -8,14 +8,14 @@
 Example               default no-default-features
 size-simple-clap       463KiB   463KiB
 size-simple-argh      40.3KiB  40.3KiB
-size-simple-palc      36.9KiB  26.0KiB
+size-simple-palc      35.1KiB  26.1KiB
 size-simple-none      9.36KiB  9.36KiB
 size-criterion-clap    610KiB   610KiB
 size-criterion-argh   55.6KiB  55.6KiB
-size-criterion-palc   54.6KiB  40.9KiB
+size-criterion-palc   51.9KiB  41.0KiB
 size-deno-clap         697KiB   697KiB
-size-deno-palc         118KiB  87.9KiB
+size-deno-palc         116KiB  90.3KiB
 
 Compile time
-comptime-default     3.10user 0.98system 0:02.27elapsed
-comptime-incremental 0.06user 0.08system 0:00.11elapsed
+comptime-default     3.25user 1.10system 0:02.43elapsed
+comptime-incremental 0.07user 0.08system 0:00.12elapsed
