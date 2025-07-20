@@ -2,14 +2,15 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::{DeriveInput, Ident, Type};
 
-use crate::common::{CommandMeta, ErrorCollector, wrap_anon_item};
+use crate::common::{CommandMeta, wrap_anon_item};
 use crate::derive_args::ParserStateDefImpl;
+use crate::error::{Result, catch_errors};
 use syn::spanned::Spanned;
 
 pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
-    let mut tts = match expand_impl(input) {
+    let mut tts = match catch_errors(|| expand_impl(input)) {
         Ok(out) => return wrap_anon_item(out),
-        Err(err) => err.into_compile_error(),
+        Err(err) => err,
     };
 
     let name = &input.ident;
@@ -65,19 +66,15 @@ impl ToTokens for VariantImpl<'_> {
     }
 }
 
-fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
+fn expand_impl(def: &DeriveInput) -> Result<SubcommandImpl<'_>> {
     let syn::Data::Enum(data) = &def.data else {
-        return Err(syn::Error::new(
-            Span::call_site(),
-            "derive(Subcommand) can only be used on enums",
-        ));
+        abort!(Span::call_site(), "derive(Subcommand) can only be used on enums");
     };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
-        return Err(syn::Error::new(def.ident.span(), "TODO: generics are not supported yet"));
+        abort!(Span::call_site(), "TODO: generics are not supported yet");
     }
 
-    let mut errs = ErrorCollector::default();
     let enum_name = &def.ident;
     let mut state_defs = Vec::with_capacity(data.variants.len());
 
@@ -95,26 +92,26 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
                 }
                 syn::Fields::Unnamed(fields) => {
                     if fields.unnamed.len() != 1 {
-                        errs.push(syn::Error::new(
-                            variant_name.span(),
+                        emit_error!(
+                            variant_name,
                             "subcommand tuple variant must have a single element",
-                        ));
+                        );
                         return None;
                     }
                     // TODO: Handle or reject `command()` here.
                     VariantImpl::Tuple { ident: variant_name, ty: &fields.unnamed[0].ty }
                 }
                 syn::Fields::Named(fields) => {
-                    let cmd_meta = errs.collect(CommandMeta::parse_attrs(&variant.attrs));
+                    let cmd_meta = CommandMeta::parse_attrs(&variant.attrs);
                     let state_name =
                         format_ident!("{enum_name}{variant_name}State", span = variant_name.span());
-                    let mut state = errs.collect(crate::derive_args::expand_state_def_impl(
+                    let mut state = crate::derive_args::expand_state_def_impl(
                         &def.vis,
-                        cmd_meta,
+                        Some(cmd_meta),
                         state_name.clone(),
                         enum_name.to_token_stream(),
                         fields,
-                    ))?;
+                    );
                     state.output_ctor = Some(quote!(#enum_name :: #variant_name));
                     state_defs.push(state);
                     VariantImpl::Struct { state_ident: state_name }
@@ -124,7 +121,7 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
         })
         .collect::<Vec<_>>();
 
-    errs.finish_then(SubcommandImpl { enum_name, state_defs, variants })
+    Ok(SubcommandImpl { enum_name, state_defs, variants })
 }
 
 impl ToTokens for SubcommandImpl<'_> {

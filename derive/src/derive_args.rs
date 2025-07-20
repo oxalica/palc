@@ -4,18 +4,19 @@ use std::num::NonZero;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{DeriveInput, Error, Ident, LitChar, LitStr, Visibility};
+use syn::{DeriveInput, Ident, LitChar, LitStr, Visibility};
 
 use crate::common::{
-    ArgOrCommand, ArgTyKind, ArgsCommandMeta, CommandMeta, Doc, ErrorCollector, FieldPath,
-    Override, TY_OPTION, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
+    ArgOrCommand, ArgTyKind, ArgsCommandMeta, CommandMeta, Doc, FieldPath, Override, TY_OPTION,
+    strip_ty_ctor, wrap_anon_item,
 };
+use crate::error::{Result, catch_errors};
 use crate::shared::{AcceptHyphen, ArgAttrs};
 
 pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
-    let mut tts = match expand_args_impl(input, is_parser) {
+    let mut tts = match catch_errors(|| expand_args_impl(input, is_parser)) {
         Ok(out) => return wrap_anon_item(out),
-        Err(err) => err.into_compile_error(),
+        Err(tts) => tts,
     };
 
     // Error fallback impl.
@@ -44,38 +45,30 @@ pub struct ArgsImpl<'i> {
     state: ParserStateDefImpl<'i>,
 }
 
-fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<'_>> {
+fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> Result<ArgsImpl<'_>> {
     let syn::Data::Struct(syn::DataStruct { fields: syn::Fields::Named(fields), .. }) = &def.data
     else {
-        return Err(syn::Error::new(
+        abort!(
             Span::call_site(),
-            "derive(Args) and derive(Parser) can only be used on named structs",
-        ));
+            "derive(Args) and derive(Parser) can only be used on named structs"
+        );
     };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
-        return Err(Error::new(def.ident.span(), "TODO: generics are not supported yet"));
+        abort!(def.ident, "TODO: generics are not supported yet");
     }
 
-    let mut errs = ErrorCollector::default();
-    let cmd_meta = errs.collect(CommandMeta::parse_attrs(&def.attrs)).unwrap_or_default();
+    let cmd_meta = CommandMeta::parse_attrs(&def.attrs);
 
     if u8::try_from(fields.named.len()).is_err() {
-        return Err(Error::new(def.ident.span(), "derive(Args) only supports up to 255 fields"));
+        abort!(def.ident, "derive(Args) only supports up to 255 fields");
     }
 
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
-    let state = errs.collect(expand_state_def_impl(
-        &def.vis,
-        Some(cmd_meta),
-        state_name,
-        struct_name,
-        fields,
-    ));
+    let state = expand_state_def_impl(&def.vis, Some(cmd_meta), state_name, struct_name, fields);
 
-    errs.finish()?;
-    Ok(ArgsImpl { is_parser, state: state.unwrap() })
+    Ok(ArgsImpl { is_parser, state })
 }
 
 impl ToTokens for ArgsImpl<'_> {
@@ -214,20 +207,17 @@ impl ToTokens for FieldFinish {
     }
 }
 
-fn encode_long_name(name: &LitStr, errs: &mut ErrorCollector) -> String {
+fn encode_long_name(name: &LitStr) -> String {
     let s = name.value();
     if s.is_empty() {
-        errs.push(syn::Error::new(name.span(), "arg(long) name must NOT be empty"));
+        emit_error!(name, "arg(long) name must NOT be empty");
     } else if s.starts_with('-') {
-        errs.push(syn::Error::new(
-                name.span(),
-                "arg(long) name must NOT specify leading '-', they are always assumed to be '--'-prefixed",
-            ));
+        emit_error!(
+            name,
+            r#"arg(long) name is automatically prefixed by "--", and you should not add more "-" prefix"#,
+        );
     } else if s.contains(|c: char| c == '=' && c.is_ascii_control()) {
-        errs.push(syn::Error::new(
-            name.span(),
-            "arg(long) name must NOT contain '=' or ASCII control characters",
-        ));
+        emit_error!(name, "arg(long) name must NOT contain '=' or ASCII control characters");
     }
     if s.len() > 1 {
         s
@@ -237,23 +227,20 @@ fn encode_long_name(name: &LitStr, errs: &mut ErrorCollector) -> String {
     }
 }
 
-fn encode_short_name(name: &LitChar, errs: &mut ErrorCollector) -> String {
+fn encode_short_name(name: &LitChar) -> String {
     let c = name.value();
     if c == '-' || c.is_ascii_control() {
-        errs.push(syn::Error::new(
-            name.span(),
-            "arg(short) name must NOT be '-' or ASCII control characters",
-        ));
+        emit_error!(name, "arg(short) name must NOT be '-' or ASCII control characters");
     } else if !c.is_ascii() {
         // NB. It is assumed to be ASCII in `refl::NamedArgInfo::short_args()` and
         // `ArgsIter::next_arg()`.
-        errs.push(syn::Error::new(
-            name.span(),
+        emit_error!(
+            name,
             r#"Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \
                 A unicode codepoint is not necessarity a "character" in human sense, thus \
                 automatic splitting or argument de-bundling may give unexpected results. \
                 If you do want this to be supported, convince us by opening an issue."#,
-        ));
+        );
     }
     c.into()
 }
@@ -264,11 +251,8 @@ pub fn expand_state_def_impl<'i>(
     state_name: Ident,
     output_ty: TokenStream,
     input_fields: &'i syn::FieldsNamed,
-) -> syn::Result<ParserStateDefImpl<'i>> {
-    let field_attrs = parse_args_attrs(input_fields)?;
+) -> ParserStateDefImpl<'i> {
     let input_fields = &input_fields.named;
-
-    let mut errs = ErrorCollector::default();
 
     let mut out = ParserStateDefImpl {
         vis,
@@ -287,29 +271,30 @@ pub fn expand_state_def_impl<'i>(
     };
 
     let mut variable_len_arg_span = None;
-    let mut check_variable_len_arg = |errs: &mut ErrorCollector, span: Span| {
+    let mut check_variable_len_arg = |span: Span| {
         if let Some(prev) = variable_len_arg_span.replace(span) {
-            errs.push(Error::new(span, "duplicated variable-length arguments"));
-            errs.push(Error::new(prev, "previously defined here"));
+            emit_error!(span, "duplicated variable-length arguments");
+            emit_error!(prev, "previously defined here");
         }
     };
 
     let mut seen_enc_names = HashMap::new();
-    let mut check_dup_name = |enc_name: String, span: Span, errs: &mut ErrorCollector| {
+    let mut check_dup_name = |enc_name: String, span: Span| {
         if let Some(prev_span) = seen_enc_names.insert(enc_name, span) {
-            errs.push(syn::Error::new(span, "duplicated argument names"));
-            errs.push(syn::Error::new(prev_span, "previously defined here"));
+            emit_error!(span, "duplicated argument names");
+            emit_error!(prev_span, "previously defined here");
         }
     };
 
-    for (field, attrs) in input_fields.iter().zip(field_attrs) {
+    for field in input_fields {
+        let attrs = ArgOrCommand::parse_attrs(&field.attrs);
         let ident = field.ident.as_ref().expect("named struct");
         let ident_str = ident.to_string();
 
         let mut arg = match attrs {
             ArgOrCommand::Arg(arg) => arg,
             ArgOrCommand::Command(ArgsCommandMeta::Subcommand) => {
-                check_variable_len_arg(&mut errs, ident.span());
+                check_variable_len_arg(ident.span());
                 let (optional, effective_ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
                     Some(subty) => (true, subty),
                     None => (false, &field.ty),
@@ -356,20 +341,17 @@ pub fn expand_state_def_impl<'i>(
             }
             (None, None) => None,
             (Some(_), Some(tt)) => {
-                errs.push(syn::Error::new(
-                    tt.span(),
-                    "arg(default_value) conflicts with arg(default_value_t)",
-                ));
+                emit_error!(tt, "arg(default_value) conflicts with arg(default_value_t)");
                 None
             }
         };
         let (required, default_expr) = match default_expr {
             Some(e) => {
                 if arg.required {
-                    errs.push(Error::new(
-                        ident.span(),
-                        "arg(required) conflicts with arg(default_value{,_t})",
-                    ));
+                    emit_error!(
+                        ident,
+                        "`arg(required)` conflicts with `arg(default_value, default_value_t)`"
+                    );
                 }
                 (false, Some(e))
             }
@@ -379,25 +361,22 @@ pub fn expand_state_def_impl<'i>(
         let value_delimiter = if let Some(ch) = &arg.value_delimiter {
             let ch = ch.value();
             if !matches!(kind, FieldKind::OptionVec) {
-                errs.push(syn::Error::new(
-                    ch.span(),
-                    "arg(value_delimiter) must be used on Vec-like types",
-                ));
+                emit_error!(ch, "arg(value_delimiter) must be used on Vec-like types");
                 None
             } else if !ch.is_ascii() || ch.is_ascii_control() {
-                errs.push(syn::Error::new(
-                    ch.span(),
+                emit_error!(
+                    ch,
                     r#"arg(value_delimiter) must be non-control ASCII characters. \
                     A unicode codepoint is not necessarity a "character" in human sense, thus \
                     automatic splitting may give unexpected results. \
                     If you do want this to be supported, convince us by opening an issue."#,
-                ));
+                );
                 None
             } else if !arg.is_named() {
-                errs.push(syn::Error::new(
-                    ch.span(),
+                emit_error!(
+                    ch,
                     "TODO: arg(value_delimiter) is not yet supported on unnamed arguments",
-                ));
+                );
                 None
             } else {
                 Some(NonZero::new(ch as u8).expect("not NUL"))
@@ -412,21 +391,18 @@ pub fn expand_state_def_impl<'i>(
             (false, false) => AcceptHyphen::No,
             (true, true) => {
                 // TODO: More accurate spans.
-                errs.push(Error::new(
-                    ident.span(),
+                emit_error!(
+                    ident,
                     "arg(allow_hyphen_values) and arg(allow_negative_numbers) \
                         conflict with each other",
-                ));
+                );
                 AcceptHyphen::No
             }
         };
         if accept_hyphen != AcceptHyphen::No
             && matches!(kind, FieldKind::BoolSetTrue | FieldKind::Counter)
         {
-            errs.push(Error::new(
-                ident.span(),
-                "Only arguments that take values can allow hyphen values",
-            ));
+            emit_error!(ident, "Only arguments that take values can allow hyphen values");
         }
 
         let value_name = match &arg.value_name {
@@ -434,20 +410,17 @@ pub fn expand_state_def_impl<'i>(
             None => heck::AsShoutySnekCase(&ident_str).to_string(),
         };
         if value_name.contains(|ch: char| ch.is_ascii_control()) {
-            errs.push(syn::Error::new(
-                value_name.span(),
-                "arg(value_name) must NOT contain ASCII control characters",
-            ));
+            emit_error!(value_name, "arg(value_name) must NOT contain ASCII control characters");
         }
 
         if arg.is_named() {
             // Named arguments.
 
             if arg.last || arg.trailing_var_arg {
-                errs.push(Error::new(
-                    field.ty.span(),
+                emit_error!(
+                    field.ty,
                     "arg(last, trailing_var_arg) only support positional arguments",
-                ));
+                );
                 continue;
             }
 
@@ -461,9 +434,9 @@ pub fn expand_state_def_impl<'i>(
                 None => None,
             };
             for name in arg.alias.iter().chain(&primary_long_name) {
-                let enc = encode_long_name(name, &mut errs);
+                let enc = encode_long_name(name);
                 enc_names.push(enc.clone());
-                check_dup_name(enc, name.span(), &mut errs);
+                check_dup_name(enc, name.span());
             }
 
             let primary_short_name = match arg.short {
@@ -475,9 +448,9 @@ pub fn expand_state_def_impl<'i>(
                 None => None,
             };
             for name in arg.short_alias.iter().chain(&primary_short_name) {
-                let enc = encode_short_name(name, &mut errs);
+                let enc = encode_short_name(name);
                 enc_names.push(enc.clone());
-                check_dup_name(enc, name.span(), &mut errs);
+                check_dup_name(enc, name.span());
             }
 
             assert!(!enc_names.is_empty());
@@ -532,17 +505,11 @@ pub fn expand_state_def_impl<'i>(
             // Unnamed arguments.
 
             if arg.require_equals || arg.global {
-                errs.push(syn::Error::new(
-                    ident.span(),
-                    "arg(require_equals, global) only support named arguments",
-                ));
+                emit_error!(ident, "arg(require_equals, global) only support named arguments");
                 continue;
             }
             if arg.default_value_t.is_some() {
-                errs.push(syn::Error::new(
-                    ident.span(),
-                    "TODO: arg(default_value_t) supports named arguments yet",
-                ));
+                emit_error!(ident, "TODO: arg(default_value_t) supports named arguments yet");
                 continue;
             }
 
@@ -583,8 +550,8 @@ pub fn expand_state_def_impl<'i>(
             let allow_accept_hyphen = if arg.last {
                 // Last argument(s).
                 if let Some(prev) = out.last_field.replace(field_idx) {
-                    errs.push(Error::new(ident.span(), "duplicated arg(last)"));
-                    errs.push(Error::new(out.fields[prev].ident.span(), "previously defined here"));
+                    emit_error!(ident, "duplicated arg(last)");
+                    emit_error!(out.fields[prev].ident.span(), "previously defined here");
                 }
 
                 // `allow_hyphen_values` is allowed for last arguments, though it is already assumed.
@@ -593,7 +560,7 @@ pub fn expand_state_def_impl<'i>(
                 // Variable length unnamed argument.
 
                 let greedy = arg.trailing_var_arg;
-                check_variable_len_arg(&mut errs, ident.span());
+                check_variable_len_arg(ident.span());
                 out.catchall_field = Some(CatchallFieldInfo { field_idx, greedy });
                 greedy
             } else {
@@ -603,23 +570,25 @@ pub fn expand_state_def_impl<'i>(
             };
 
             if accept_hyphen != AcceptHyphen::No && !allow_accept_hyphen {
-                errs.push(Error::new(
-                    ident.span(),
+                emit_error!(
+                    ident,
                     "arg(allow_hyphen_values) can only be used on \
                     named arguments or arg(trailing_var_arg) yet",
-                ));
+                );
             }
         }
     }
 
-    if out.fields.iter().any(|f| f.exclusive) && !out.flatten_fields.is_empty() {
-        errs.push(syn::Error::new(
-            Span::call_site(),
-            "TODO: arg(exclusive) is not supported on struct containing arg(flatten) yet",
-        ));
+    if let Some(f) = out.fields.iter().find(|f| f.exclusive) {
+        if !out.flatten_fields.is_empty() {
+            emit_error!(
+                f.ident,
+                "TODO: arg(exclusive) is not supported on struct containing arg(flatten) yet",
+            );
+        }
     }
 
-    errs.finish_then(out)
+    out
 }
 
 impl ToTokens for ParserStateDefImpl<'_> {

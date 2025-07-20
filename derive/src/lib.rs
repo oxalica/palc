@@ -2,14 +2,17 @@
 use proc_macro::TokenStream;
 use syn::DeriveInput;
 
-#[cfg(test)]
-mod tests;
+#[macro_use]
+mod error;
 
 mod common;
 mod derive_args;
 mod derive_subcommand;
 mod derive_value_enum;
 mod shared;
+
+#[cfg(test)]
+mod tests;
 
 #[proc_macro_derive(Parser, attributes(arg, command))]
 pub fn derive_parser(tts: TokenStream) -> TokenStream {

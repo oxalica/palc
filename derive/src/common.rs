@@ -9,57 +9,13 @@ use syn::spanned::Spanned;
 use syn::{Attribute, GenericArgument, LitBool, LitChar, LitStr, PathArguments, Type};
 use syn::{Token, bracketed, token};
 
+use crate::error::try_syn;
 use crate::shared::{AcceptHyphen, ArgAttrs};
 
 pub const TY_BOOL: &str = "bool";
 pub const TY_U8: &str = "u8";
 pub const TY_OPTION: &str = "Option";
 pub const TY_VEC: &str = "Vec";
-
-#[derive(Default)]
-pub(crate) struct ErrorCollector {
-    err: Option<syn::Error>,
-    defused: bool,
-}
-
-impl ErrorCollector {
-    pub fn collect<T>(&mut self, ret: syn::Result<T>) -> Option<T> {
-        match ret {
-            Ok(v) => Some(v),
-            Err(e) => {
-                self.push(e);
-                None
-            }
-        }
-    }
-
-    pub fn push(&mut self, e: syn::Error) {
-        match &mut self.err {
-            Some(prev) => prev.combine(e),
-            p @ None => *p = Some(e),
-        }
-    }
-
-    pub fn finish(mut self) -> syn::Result<()> {
-        self.defused = true;
-        match self.err.take() {
-            None => Ok(()),
-            Some(e) => Err(e),
-        }
-    }
-
-    pub fn finish_then<T>(self, v: T) -> syn::Result<T> {
-        self.finish().map(|()| v)
-    }
-}
-
-impl Drop for ErrorCollector {
-    fn drop(&mut self) {
-        if !self.defused && !std::thread::panicking() {
-            assert!(self.err.is_none(), "error not finished");
-        }
-    }
-}
 
 /// `TyCtor<ArgTy>` => `ArgTy`. `ty_ctor` must be a single-identifier path.
 pub fn strip_ty_ctor<'i>(mut ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
@@ -135,55 +91,76 @@ impl ArgTyKind<'_> {
     }
 }
 
+// Utility macros for attribute parsers.
+
+trait OptionExt<T> {
+    fn set_once(&mut self, span: Span, v: T);
+}
+impl<T> OptionExt<T> for Option<T> {
+    fn set_once(&mut self, span: Span, v: T) {
+        if self.is_none() {
+            *self = Some(v);
+        } else {
+            emit_error!(span, "duplicated attribute");
+        }
+    }
+}
+
+trait BoolExt {
+    fn parse_true(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()>;
+}
+impl BoolExt for bool {
+    fn parse_true(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
+        let lit = meta.value()?.parse::<LitBool>()?;
+        if !lit.value {
+            emit_error!(lit, "only `true` is supported here");
+        } else if *self {
+            emit_error!(lit, "duplicated attribute");
+        } else {
+            *self = true;
+        }
+        Ok(())
+    }
+}
+
 pub enum ArgOrCommand {
     Arg(Box<ArgMeta>),
     Command(ArgsCommandMeta),
 }
 
-/// Parse `arg(..)` and `command(..)` in `derive(Args)`-like struct or variants.
-pub fn parse_args_attrs(fields: &syn::FieldsNamed) -> syn::Result<Vec<ArgOrCommand>> {
-    let mut errs = ErrorCollector::default();
-    let attrs = fields
-        .named
-        .iter()
-        .filter_map(|f| errs.collect(ArgOrCommand::parse_attrs(&f.attrs)))
-        .collect();
-    errs.finish_then(attrs)
-}
-
 impl ArgOrCommand {
-    fn parse_attrs(attrs: &[Attribute]) -> syn::Result<ArgOrCommand> {
-        let mut errs = ErrorCollector::default();
+    pub fn parse_attrs(attrs: &[Attribute]) -> ArgOrCommand {
         let mut doc = Doc::default();
         let mut arg = None::<Box<ArgMeta>>;
         let mut command = None;
         for attr in attrs {
             let path = attr.path();
-            doc.extend_from_attr(attr)?;
+            doc.extend_from_attr(attr);
             if path.is_ident("arg") {
                 let arg = arg.get_or_insert_default();
-                errs.collect(attr.parse_nested_meta(|meta| arg.parse_update(&meta)));
+                try_syn(attr.parse_nested_meta(|meta| arg.parse_update(&meta)));
             } else if path.is_ident("command") {
-                if let Some(c) = errs.collect(attr.parse_args::<ArgsCommandMeta>()) {
+                if let Some(c) = try_syn(attr.parse_args::<ArgsCommandMeta>()) {
                     if command.is_some() {
-                        errs.push(syn::Error::new(path.span(), "duplicated command(..)"));
+                        emit_error!(path, "duplicated command(..)");
                     }
                     command = Some((path.span(), c));
                 }
             }
         }
+
         doc.post_process();
-        let ret = if let Some((span, c)) = command {
+
+        if let Some((span, c)) = command {
             if arg.is_some() {
-                errs.push(syn::Error::new(span, "command(..) conflicts with arg(..)"));
+                emit_error!(span, "command(..) conflicts with arg(..)");
             }
             Self::Command(c)
         } else {
             let mut arg = arg.unwrap_or_default();
             arg.doc = doc;
             Self::Arg(arg)
-        };
-        errs.finish_then(ret)
+        }
     }
 }
 
@@ -240,87 +217,53 @@ impl ArgMeta {
     fn parse_update(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         let path = &meta.path;
         let span = path.span();
-        macro_rules! ensure {
-            ($cond:expr, $msg:expr) => {
-                if !$cond {
-                    return Err(syn::Error::new(span, $msg));
-                }
-            };
-        }
-        macro_rules! check_dup {
-            ($name:ident) => {
-                ensure!(self.$name.is_none(), concat!("duplicated arg(", stringify!($name), ")"));
-            };
-        }
-        macro_rules! check_true {
-            () => {
-                let v = meta.value()?.parse::<LitBool>()?;
-                if !v.value {
-                    return Err(syn::Error::new(v.span, "must be true"));
-                }
-            };
-        }
 
         if path.is_ident("long") {
-            check_dup!(long);
-            self.long = Some(meta.input.parse()?);
+            self.long.set_once(span, meta.input.parse()?);
         } else if path.is_ident("short") {
-            check_dup!(short);
-            self.short = Some(meta.input.parse()?);
+            self.short.set_once(span, meta.input.parse()?);
         } else if path.is_ident("alias") || path.is_ident("aliases") {
             self.alias.extend(meta.value()?.parse::<OneOrArray<LitStr>>()?);
         } else if path.is_ident("short_alias") || path.is_ident("short_aliases") {
             self.short_alias.extend(meta.value()?.parse::<OneOrArray<LitChar>>()?);
         } else if path.is_ident("value_name") {
-            check_dup!(value_name);
-            self.value_name = Some(meta.value()?.parse::<LitStr>()?);
+            self.value_name.set_once(span, meta.value()?.parse::<LitStr>()?);
         } else if path.is_ident("require_equals") {
-            check_true!();
-            self.require_equals = true;
+            self.require_equals.parse_true(meta)?;
         } else if path.is_ident("global") {
-            check_true!();
-            self.global = true;
+            self.global.parse_true(meta)?;
         } else if path.is_ident("allow_hyphen_values") {
-            check_true!();
-            self.allow_hyphen_values = true;
+            self.allow_hyphen_values.parse_true(meta)?;
         } else if path.is_ident("allow_negative_numbers") {
-            check_true!();
-            self.allow_negative_numbers = true;
+            self.allow_negative_numbers.parse_true(meta)?;
         } else if path.is_ident("trailing_var_arg") {
-            check_true!();
-            self.trailing_var_arg = true;
+            self.trailing_var_arg.parse_true(meta)?;
         } else if path.is_ident("last") {
-            check_true!();
-            self.last = true;
+            self.last.parse_true(meta)?;
         } else if path.is_ident("default_value") {
-            check_dup!(default_value);
-            self.default_value = Some(meta.value()?.parse()?);
+            self.default_value.set_once(span, meta.value()?.parse()?);
         } else if path.is_ident("default_value_t") || path.is_ident("default_values_t") {
-            parse_unique_override(&mut self.default_value_t, meta)?;
+            self.default_value_t.set_once(span, meta.input.parse()?);
         } else if path.is_ident("use_value_delimiter") {
-            check_true!();
-            check_dup!(value_delimiter);
-            self.value_delimiter = Some(syn::LitChar::new(',', Span::call_site()));
+            let lit = meta.value()?.parse::<LitBool>()?;
+            if !lit.value {
+                emit_error!(lit, "only `true` is supported here");
+            }
+            self.value_delimiter.set_once(span, syn::LitChar::new(',', Span::call_site()));
         } else if path.is_ident("value_delimiter") {
-            check_dup!(value_delimiter);
-            self.value_delimiter = Some(meta.value()?.parse::<syn::LitChar>()?);
+            self.value_delimiter.set_once(span, meta.value()?.parse::<syn::LitChar>()?);
         } else if path.is_ident("value_enum") {
             // Ignored.
         } else if path.is_ident("help") {
-            check_dup!(help);
-            self.help = Some(meta.value()?.parse::<LitStr>()?);
+            self.help.set_once(span, meta.value()?.parse::<LitStr>()?);
         } else if path.is_ident("long_help") {
-            check_dup!(long_help);
-            self.help = Some(meta.value()?.parse::<LitStr>()?);
+            self.long_help.set_once(span, meta.value()?.parse::<LitStr>()?);
         } else if path.is_ident("hide") {
-            check_true!();
-            self.hide = true;
+            self.hide.parse_true(meta)?;
         } else if path.is_ident("required") {
-            check_true!();
-            self.required = true;
+            self.required.parse_true(meta)?;
         } else if path.is_ident("exclusive") {
-            check_true!();
-            self.exclusive = true;
+            self.exclusive.parse_true(meta)?;
         } else if path.is_ident("requires") {
             self.requires.push(meta.value()?.parse()?);
         } else if path.is_ident("conflicts_with") {
@@ -328,7 +271,7 @@ impl ArgMeta {
         } else if path.is_ident("conflicts_with_all") {
             self.conflicts_with.extend(meta.value()?.parse::<OneOrArray<FieldPath>>()?);
         } else {
-            ensure!(false, "unknown attribute");
+            emit_error!(path, "unknown attribute");
         }
         Ok(())
     }
@@ -369,66 +312,49 @@ pub struct CommandMeta {
 }
 
 impl CommandMeta {
-    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Box<Self>> {
-        let mut errs = ErrorCollector::default();
+    pub fn parse_attrs(attrs: &[Attribute]) -> Box<Self> {
         let mut doc = Doc::default();
         let mut this = <Box<Self>>::default();
         for attr in attrs {
-            doc.extend_from_attr(attr)?;
+            doc.extend_from_attr(attr);
             if attr.path().is_ident("command") {
-                errs.collect(attr.parse_nested_meta(|meta| this.parse_update(&meta)));
+                try_syn(attr.parse_nested_meta(|meta| this.parse_update(&meta)));
             } else if attr.path().is_ident("arg") {
-                errs.push(syn::Error::new(
-                    attr.span(),
-                    "arg(..) is not supported here, do you mean command(..)?",
-                ));
+                emit_error!(attr, "only `command(..)` is allowed on the whole struct or enum");
             }
         }
         doc.post_process();
         this.doc = doc;
-        errs.finish_then(this)
+        this
     }
 
     fn parse_update(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         let path = &meta.path;
         let span = path.span();
 
-        macro_rules! check_dup {
-            ($name:ident) => {
-                if self.$name.is_some() {
-                    return Err(syn::Error::new(
-                        span,
-                        concat!("duplicated arg(", stringify!($name), ")"),
-                    ));
-                }
-            };
-        }
-
         if path.is_ident("name") {
-            check_dup!(name);
-            self.name = Some(meta.value()?.parse()?);
+            self.name.set_once(span, meta.value()?.parse()?);
         } else if path.is_ident("version") {
-            parse_unique_override(&mut self.version, meta)?;
+            self.version.set_once(span, meta.input.parse()?);
         } else if path.is_ident("author") {
-            parse_unique_override(&mut self.author, meta)?;
+            self.author.set_once(span, meta.input.parse()?);
         } else if path.is_ident("about") {
-            parse_unique_override(&mut self.about, meta)?;
+            self.about.set_once(span, meta.input.parse()?);
         } else if path.is_ident("long_about") {
-            parse_unique_override(&mut self.long_about, meta)?;
+            self.long_about.set_once(span, meta.input.parse()?);
         } else if path.is_ident("after_help") {
-            check_dup!(after_help);
-            self.after_help = Some(meta.value()?.parse()?);
+            self.after_help.set_once(span, meta.value()?.parse()?);
         } else if path.is_ident("after_long_help") {
-            check_dup!(after_long_help);
-            self.after_long_help = Some(meta.value()?.parse()?);
+            self.after_long_help.set_once(span, meta.value()?.parse()?);
         } else if path.is_ident("term_width") || path.is_ident("max_term_width") {
-            return Err(syn::Error::new(
+            meta.value()?.parse::<syn::Expr>()?;
+            emit_error!(
                 span,
-                "command({max_,}term_width) are intentionally NOT supported, \
+                "`command(term_width, max_term_width)` are intentionally NOT supported, \
                 because line-wrapping's drawback outweighs its benefits.",
-            ));
+            );
         } else {
-            return Err(syn::Error::new(path.span(), "unknown attribute"));
+            emit_error!(span, "unknown attribute");
         }
 
         Ok(())
@@ -441,30 +367,22 @@ pub struct ValueEnumMeta {
 }
 
 impl ValueEnumMeta {
-    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
-        let mut errs = ErrorCollector::default();
+    pub fn parse_attrs(attrs: &[Attribute]) -> Self {
         let mut rename_all = None;
         for attr in attrs {
             if !attr.path().is_ident("value") {
                 continue;
             }
-            let ret = attr.parse_nested_meta(|meta| {
+            try_syn(attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("rename_all") {
-                    let value = meta.value()?.parse::<Rename>()?;
-                    if rename_all.replace(value).is_some() {
-                        errs.push(syn::Error::new(
-                            meta.path.span(),
-                            "duplicated `value(rename_all)`",
-                        ));
-                    }
+                    rename_all.set_once(meta.path.span(), meta.value()?.parse::<Rename>()?);
                 } else {
-                    errs.push(syn::Error::new(meta.path.span(), "unknown attribute"));
+                    emit_error!(meta.path, "unknown attribute");
                 }
                 Ok(())
-            });
-            errs.collect(ret);
+            }));
         }
-        errs.finish_then(Self { rename_all: rename_all.unwrap_or(Rename::KebabCase) })
+        Self { rename_all: rename_all.unwrap_or(Rename::KebabCase) }
     }
 }
 
@@ -476,27 +394,22 @@ pub struct ValueVariantMeta {
 }
 
 impl ValueVariantMeta {
-    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
-        let mut errs = ErrorCollector::default();
+    pub fn parse_attrs(attrs: &[Attribute]) -> Self {
         let mut this = Self::default();
         for attr in attrs {
             if !attr.path().is_ident("value") {
                 continue;
             }
-            let ret = attr.parse_nested_meta(|meta| {
+            try_syn(attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("name") {
-                    if this.name.is_some() {
-                        errs.push(syn::Error::new(meta.path.span(), "duplicated attribute"));
-                    }
-                    this.name = Some(meta.value()?.parse::<LitStr>()?.value());
+                    this.name.set_once(meta.path.span(), meta.value()?.parse::<LitStr>()?.value());
                 } else {
-                    errs.push(syn::Error::new(meta.path.span(), "unknown attribute"));
+                    emit_error!(meta.path, "unknown attribute");
                 }
                 Ok(())
-            });
-            errs.collect(ret);
+            }));
         }
-        errs.finish_then(this)
+        this
     }
 }
 
@@ -605,17 +518,6 @@ impl<T: Parse> Parse for Override<T> {
     }
 }
 
-fn parse_unique_override(
-    place: &mut Option<Override<impl Parse>>,
-    meta: &ParseNestedMeta<'_>,
-) -> syn::Result<()> {
-    if place.is_some() {
-        return Err(syn::Error::new(meta.path.span(), "duplicated attribute"));
-    }
-    *place = Some(meta.input.parse()?);
-    Ok(())
-}
-
 /// `"IDENT"` or `("." IDENT)+`.
 pub struct FieldPath(pub Vec<Ident>);
 
@@ -696,31 +598,27 @@ impl Doc {
         self.0.truncate(len);
     }
 
-    fn extend_from_attr(&mut self, attr: &Attribute) -> syn::Result<()> {
-        if attr.path().is_ident("doc") {
-            if let syn::Meta::NameValue(m) = &attr.meta {
-                if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &m.value {
-                    let s = s.value();
-                    let s = s.trim_ascii();
-                    if s.is_empty() {
-                        if !self.0.ends_with('\n') {
-                            self.0.push('\n');
-                        }
-                    } else {
-                        if !self.0.is_empty() && !self.0.ends_with('\n') {
-                            self.0.push(' ');
-                        }
-                        self.0.push_str(s);
-                    }
-                } else {
-                    return Err(syn::Error::new(
-                        m.value.span(),
-                        "only literal doc comment is supported yet",
-                    ));
-                }
-            }
+    fn extend_from_attr(&mut self, attr: &Attribute) {
+        if !attr.path().is_ident("doc") {
+            return;
         }
-        Ok(())
+        let syn::Meta::NameValue(m) = &attr.meta else { return };
+        if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &m.value {
+            let s = s.value();
+            let s = s.trim_ascii();
+            if s.is_empty() {
+                if !self.0.ends_with('\n') {
+                    self.0.push('\n');
+                }
+            } else {
+                if !self.0.is_empty() && !self.0.ends_with('\n') {
+                    self.0.push(' ');
+                }
+                self.0.push_str(s);
+            }
+        } else {
+            emit_error!(m.value, "only literal doc comment is supported yet");
+        }
     }
 
     pub fn summary(&self) -> &str {

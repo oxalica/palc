@@ -2,12 +2,15 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::{DeriveInput, Generics, Ident};
 
-use crate::common::{ValueEnumMeta, ValueVariantMeta, wrap_anon_item};
+use crate::{
+    common::{ValueEnumMeta, ValueVariantMeta, wrap_anon_item},
+    error::{Result, catch_errors},
+};
 
 pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
-    let mut tts = match expand_impl(input) {
+    let mut tts = match catch_errors(|| expand_impl(input)) {
         Ok(tts) => return wrap_anon_item(tts),
-        Err(err) => err.to_compile_error(),
+        Err(err) => err,
     };
 
     tts.extend(wrap_anon_item(ValueEnumImpl {
@@ -18,27 +21,22 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     tts
 }
 
-fn expand_impl(def: &DeriveInput) -> syn::Result<ValueEnumImpl<'_>> {
+fn expand_impl(def: &DeriveInput) -> Result<ValueEnumImpl<'_>> {
     let syn::Data::Enum(enum_def) = &def.data else {
-        return Err(syn::Error::new(
-            Span::call_site(),
-            "derive(ValueEnum) can only be used on enums",
-        ));
+        abort!(Span::call_site(), "derive(ValueEnum) can only be used on enums");
     };
 
-    let enum_meta = ValueEnumMeta::parse_attrs(&def.attrs)?;
+    let enum_meta = ValueEnumMeta::parse_attrs(&def.attrs);
 
     let mut variants = enum_def
         .variants
         .iter()
-        .map(|variant| {
+        .filter_map(|variant| {
             if !matches!(variant.fields, syn::Fields::Unit) {
-                return Err(syn::Error::new(
-                    variant.ident.span(),
-                    "only unit variant is supported",
-                ));
+                emit_error!(variant.ident, "only unit variant is supported");
+                return None;
             }
-            let variant_meta = ValueVariantMeta::parse_attrs(&variant.attrs)?;
+            let variant_meta = ValueVariantMeta::parse_attrs(&variant.attrs);
 
             let parse_name = match variant_meta.name {
                 Some(name) => name,
@@ -46,24 +44,21 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<ValueEnumImpl<'_>> {
             };
 
             if parse_name.contains(|c: char| c.is_ascii_control()) {
-                return Err(syn::Error::new(
-                    variant.ident.span(),
+                emit_error!(
+                    variant.ident,
                     "value names containing ASCII control characters are not supported",
-                ));
+                );
+                return None;
             }
 
-            Ok(Variant { parse_name, ident: &variant.ident })
+            Some(Variant { parse_name, ident: &variant.ident })
         })
-        .collect::<syn::Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
     variants.sort_by(|lhs, rhs| Ord::cmp(&lhs.parse_name, &rhs.parse_name));
     if let Some(w) = variants.windows(2).find(|w| w[0].parse_name == w[1].parse_name) {
-        let mut err = syn::Error::new(
-            w[0].ident.span(),
-            format!("duplicated possible values {:?}", w[0].parse_name),
-        );
-        err.combine(syn::Error::new(w[1].ident.span(), "second variant here"));
-        return Err(err);
+        emit_error!(w[0].ident, "duplicated possible values {:?}", w[0].parse_name);
+        emit_error!(w[1].ident.span(), "second variant here");
     }
 
     Ok(ValueEnumImpl { ident: &def.ident, generics: &def.generics, variants })
