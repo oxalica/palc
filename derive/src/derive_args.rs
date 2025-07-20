@@ -482,6 +482,7 @@ pub fn expand_state_def_impl<'i>(
                 delimiter: value_delimiter,
                 global: arg.global,
                 required,
+                make_lowercase: arg.ignore_case,
                 index: field_idx as _,
             };
 
@@ -508,6 +509,9 @@ pub fn expand_state_def_impl<'i>(
                 emit_error!(ident, "arg(require_equals, global) only support named arguments");
                 continue;
             }
+            if arg.ignore_case {
+                emit_error!(ident, "arg(ignore_case) only support named arguments");
+            }
             if arg.default_value_t.is_some() {
                 emit_error!(ident, "TODO: arg(default_value_t) supports named arguments yet");
                 continue;
@@ -529,6 +533,7 @@ pub fn expand_state_def_impl<'i>(
                 delimiter: value_delimiter,
                 global: false,
                 required,
+                make_lowercase: false,
                 index: field_idx as _,
             };
             out.fields.push(FieldInfo {
@@ -722,6 +727,26 @@ impl ToTokens for FeedNamedImpl<'_> {
             return;
         }
 
+        let asserts = def
+            .named_fields
+            .iter()
+            .map(|&idx| {
+                let FieldInfo { effective_ty, attrs, .. } = &def.fields[idx];
+                if attrs.make_lowercase {
+                    quote! {
+                        const {
+                            __rt::assert!(
+                                <#effective_ty as __rt::ValueEnum>::NO_UPPER_CASE,
+                                "`arg(ignore_case)` only supports `ValueEnum` that contains no UPPERCASE variants"
+                            )
+                        }
+                    }
+                } else {
+                    TokenStream::new()
+                }
+            })
+            .collect::<TokenStream>();
+
         let arms = def
             .named_fields
             .iter()
@@ -782,6 +807,7 @@ impl ToTokens for FeedNamedImpl<'_> {
 
         tokens.extend(quote! {
             fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
+                #asserts
                 #body
             }
         });

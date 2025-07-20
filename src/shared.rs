@@ -18,6 +18,8 @@ pub struct ArgAttrs {
     pub global: bool,
     /// Is this argument argument required?
     pub required: bool,
+    // Make the value lowercase before parsing it?
+    pub make_lowercase: bool,
 
     /// The field index in the containing struct implementing `Args`.
     pub index: u8,

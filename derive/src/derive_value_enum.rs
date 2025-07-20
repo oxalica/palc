@@ -84,10 +84,14 @@ impl ToTokens for ValueEnumImpl<'_> {
         let possible_inputs_nul =
             self.variants.iter().flat_map(|v| [&v.parse_name, "\0"]).collect::<String>();
 
+        let no_upper_case =
+            self.variants.iter().all(|v| v.parse_name.bytes().all(|b| !b.is_ascii_uppercase()));
+
         tokens.extend(quote! {
             #[automatically_derived]
             impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {
-                const POSSIBLE_INPUTS_NUL: &'static str = #possible_inputs_nul;
+                const POSSIBLE_INPUTS_NUL: &'static __rt::str = #possible_inputs_nul;
+                const NO_UPPER_CASE: __rt::bool = #no_upper_case;
 
                 // If there is no variant.
                 #[allow(unreachable_code)]

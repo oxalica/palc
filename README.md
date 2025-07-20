@@ -84,6 +84,8 @@ Though some of clap features are not-yet-implemented.
     - [ ] `value(help)`
   - [x] Non-UTF-8 inputs `PathBuf`, `OsString`.
   - [x] Automatically picked custom parser via `From<OsString>`, `From<String>` or `FromStr`.
+  - [x] `arg(ignore_case)`
+    - Note: Only `ValueEnum` that has no UPPERCASE variants are supported yet, due to implementation limitation.
 
 - Argument validations:
   - [x] Reject duplicated arguments.

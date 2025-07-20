@@ -30,6 +30,10 @@ pub trait ValueEnum: Sized {
     /// See [`ArgValueInfo::POSSIBLE_INPUTS_NUL`].
     const POSSIBLE_INPUTS_NUL: &'static str;
 
+    /// Whether there is no ASCII upper case letter in any variants.
+    /// This is required for `arg(ignore_case)`.
+    const NO_UPPER_CASE: bool;
+
     fn parse_value(s: &str) -> Option<Self>;
 }
 

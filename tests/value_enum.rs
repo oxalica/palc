@@ -1,5 +1,5 @@
 use palc::__private::ValueEnum;
-use palc::ValueEnum;
+use palc::{Parser, ValueEnum};
 
 #[derive(Debug, ValueEnum)]
 enum Empty {}
@@ -64,4 +64,21 @@ test_renames! {
     "lower", RenameLower, "renamelower";
     "UPPER", RenameUpper, "RENAMEUPPER";
     "verbatim", RenameXMLHttp_Request, "RenameXMLHttp_Request";
+}
+
+#[test]
+fn ignore_case() {
+    #[derive(Debug, PartialEq, ValueEnum)]
+    enum Enum {
+        HelloWorld,
+    }
+
+    #[derive(Debug, PartialEq, Parser)]
+    struct Cli {
+        #[arg(long, ignore_case = true)]
+        key: Enum,
+    }
+
+    let got = Cli::try_parse_from(["", "--key", "hElLo-WoRlD"]).unwrap();
+    assert_eq!(got, Cli { key: Enum::HelloWorld });
 }

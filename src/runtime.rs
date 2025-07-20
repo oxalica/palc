@@ -551,7 +551,12 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
                         // Next argument as the value.
                         args.next_value(attrs.accept_hyphen)
                             .ok_or_else(|| ErrorKind::MissingValue.into())
-                            .and_then(|v| place.feed(&v, attrs))
+                            .and_then(|mut v| {
+                                if attrs.make_lowercase {
+                                    v.make_ascii_lowercase();
+                                }
+                                place.feed(&v, attrs)
+                            })
                     }
                 }
                 .map_err(

@@ -181,6 +181,7 @@ pub struct ArgMeta {
     pub global: bool,
     pub allow_hyphen_values: bool,
     pub allow_negative_numbers: bool,
+    pub ignore_case: bool,
 
     // Unnamed argument behaviors.
     pub trailing_var_arg: bool,
@@ -191,7 +192,8 @@ pub struct ArgMeta {
     pub default_value: Option<syn::LitStr>,
     pub default_value_t: Option<Override<VerbatimExpr>>,
     pub value_delimiter: Option<syn::LitChar>,
-    // TODO: num_args,
+    pub value_enum: bool,
+    // TODO: num_args, value_hint
     // index, action, value_terminator, default_missing_value*, env
 
     // Help & completion.
@@ -253,7 +255,13 @@ impl ArgMeta {
         } else if path.is_ident("value_delimiter") {
             self.value_delimiter.set_once(span, meta.value()?.parse::<syn::LitChar>()?);
         } else if path.is_ident("value_enum") {
-            // Ignored.
+            // NB. This attribute is standalone without `=`.
+            if self.value_enum {
+                emit_error!(path, "duplicated attribute");
+            }
+            self.value_enum = true;
+        } else if path.is_ident("ignore_case") {
+            self.ignore_case.parse_true(meta)?;
         } else if path.is_ident("help") {
             self.help.set_once(span, meta.value()?.parse::<LitStr>()?);
         } else if path.is_ident("long_help") {
@@ -639,8 +647,16 @@ impl ToTokens for ArgAttrs {
             return;
         }
 
-        let Self { num_values, require_eq, accept_hyphen, delimiter, global, required, index } =
-            self;
+        let Self {
+            num_values,
+            require_eq,
+            accept_hyphen,
+            delimiter,
+            global,
+            required,
+            make_lowercase,
+            index,
+        } = self;
         let delimiter_u8 = delimiter.map_or(0, NonZero::get);
         tokens.extend(quote! {
             __rt::ArgAttrs {
@@ -650,6 +666,7 @@ impl ToTokens for ArgAttrs {
                 delimiter: __rt::NonZero::new(#delimiter_u8),
                 global: #global,
                 required: #required,
+                make_lowercase: #make_lowercase,
                 index: #index,
             }
         });
