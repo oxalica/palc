@@ -435,6 +435,119 @@ impl CommandMeta {
     }
 }
 
+/// Top-level `#[value]` for `derive(ValueEnum)` enum.
+pub struct ValueEnumMeta {
+    pub rename_all: Rename,
+}
+
+impl ValueEnumMeta {
+    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
+        let mut errs = ErrorCollector::default();
+        let mut rename_all = None;
+        for attr in attrs {
+            if !attr.path().is_ident("value") {
+                continue;
+            }
+            let ret = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("rename_all") {
+                    let value = meta.value()?.parse::<Rename>()?;
+                    if rename_all.replace(value).is_some() {
+                        errs.push(syn::Error::new(
+                            meta.path.span(),
+                            "duplicated `value(rename_all)`",
+                        ));
+                    }
+                } else {
+                    errs.push(syn::Error::new(meta.path.span(), "unknown attribute"));
+                }
+                Ok(())
+            });
+            errs.collect(ret);
+        }
+        errs.finish_then(Self { rename_all: rename_all.unwrap_or(Rename::KebabCase) })
+    }
+}
+
+/// Variant `#[value]` for `derive(ValueEnum)` enum.
+#[derive(Default)]
+pub struct ValueVariantMeta {
+    pub name: Option<String>,
+    // TODO: skip, help
+}
+
+impl ValueVariantMeta {
+    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
+        let mut errs = ErrorCollector::default();
+        let mut this = Self::default();
+        for attr in attrs {
+            if !attr.path().is_ident("value") {
+                continue;
+            }
+            let ret = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    if this.name.is_some() {
+                        errs.push(syn::Error::new(meta.path.span(), "duplicated attribute"));
+                    }
+                    this.name = Some(meta.value()?.parse::<LitStr>()?.value());
+                } else {
+                    errs.push(syn::Error::new(meta.path.span(), "unknown attribute"));
+                }
+                Ok(())
+            });
+            errs.collect(ret);
+        }
+        errs.finish_then(this)
+    }
+}
+
+// Follows <https://docs.rs/clap/4.5.41/clap/_derive/index.html#valueenum-attributes>
+#[derive(Clone, Copy)]
+pub enum Rename {
+    CamelCase,
+    KebabCase,
+    PascalCase,
+    ScreamingSnakeCase,
+    SnakeCase,
+    Lower,
+    Upper,
+    Verbatim,
+}
+
+impl Parse for Rename {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let s = input.parse::<LitStr>()?;
+        Ok(match &*s.value() {
+            "camelCase" => Self::CamelCase,
+            "kebab-case" => Self::KebabCase,
+            "PascalCase" => Self::PascalCase,
+            "SCREAMING_SNAKE_CASE" => Self::ScreamingSnakeCase,
+            "snake_case" => Self::SnakeCase,
+            "lower" => Self::Lower,
+            "UPPER" => Self::Upper,
+            "verbatim" => Self::Verbatim,
+            _ => return Err(syn::Error::new(s.span(), "unknown case conversion")),
+        })
+    }
+}
+
+impl Rename {
+    pub fn rename(self, s: String) -> String {
+        #[allow(clippy::wildcard_imports)]
+        use heck::*;
+
+        match self {
+            Self::CamelCase => s.to_lower_camel_case(),
+            Self::KebabCase => s.to_kebab_case(),
+            Self::PascalCase => s.to_pascal_case(),
+            Self::ScreamingSnakeCase => s.to_shouty_snake_case(),
+            Self::SnakeCase => s.to_snake_case(),
+            Self::Lower => s.to_lowercase(),
+            Self::Upper => s.to_uppercase(),
+            Self::Verbatim => s,
+        }
+    }
+}
+
 pub struct OneOrArray<T>(pub Vec<T>);
 
 impl<T> Default for OneOrArray<T> {

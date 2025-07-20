@@ -29,7 +29,7 @@ pub fn derive_subcommand(tts: TokenStream) -> TokenStream {
     derive_subcommand::expand(&input).into()
 }
 
-#[proc_macro_derive(ValueEnum)]
+#[proc_macro_derive(ValueEnum, attributes(value))]
 pub fn derive_value_enum(tts: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(tts as DeriveInput);
     derive_value_enum::expand(&input).into()

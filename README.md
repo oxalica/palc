@@ -78,6 +78,10 @@ Though some of clap features are not-yet-implemented.
 
 - Argument value parsing:
   - [x] `derive(ValueEnum)`
+    - [x] `value(rename_all)`
+    - [x] `value(name)`
+    - [ ] `value(skip)`
+    - [ ] `value(help)`
   - [x] Non-UTF-8 inputs `PathBuf`, `OsString`.
   - [x] Automatically picked custom parser via `From<OsString>`, `From<String>` or `FromStr`.
 
