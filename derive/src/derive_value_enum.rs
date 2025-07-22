@@ -1,34 +1,33 @@
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
-use syn::{DeriveInput, Generics, Ident};
+use syn::{Data, DataEnum, DeriveInput, Generics, Ident};
 
 use crate::{
     common::{ValueEnumMeta, ValueVariantMeta, wrap_anon_item},
-    error::{Result, catch_errors},
+    error::catch_errors,
 };
 
 pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
-    let mut tts = match catch_errors(|| expand_impl(input)) {
-        Ok(tts) => return wrap_anon_item(tts),
-        Err(err) => err,
-    };
-
-    tts.extend(wrap_anon_item(ValueEnumImpl {
-        ident: &input.ident,
-        generics: &input.generics,
-        variants: Vec::new(),
-    }));
-    tts
+    match catch_errors(|| match &input.data {
+        Data::Enum(data) => Ok(expand_for_enum(input, data)),
+        _ => abort!(Span::call_site(), "only enums are supported"),
+    }) {
+        Ok(tts) => wrap_anon_item(tts),
+        Err(mut tts) => {
+            tts.extend(wrap_anon_item(ValueEnumImpl {
+                ident: &input.ident,
+                generics: &input.generics,
+                variants: Vec::new(),
+            }));
+            tts
+        }
+    }
 }
 
-fn expand_impl(def: &DeriveInput) -> Result<ValueEnumImpl<'_>> {
-    let syn::Data::Enum(enum_def) = &def.data else {
-        abort!(Span::call_site(), "derive(ValueEnum) can only be used on enums");
-    };
+fn expand_for_enum<'a>(input: &'a DeriveInput, data: &'a DataEnum) -> ValueEnumImpl<'a> {
+    let enum_meta = ValueEnumMeta::parse_attrs(&input.attrs);
 
-    let enum_meta = ValueEnumMeta::parse_attrs(&def.attrs);
-
-    let mut variants = enum_def
+    let mut variants = data
         .variants
         .iter()
         .filter_map(|variant| {
@@ -61,7 +60,7 @@ fn expand_impl(def: &DeriveInput) -> Result<ValueEnumImpl<'_>> {
         emit_error!(w[1].ident.span(), "second variant here");
     }
 
-    Ok(ValueEnumImpl { ident: &def.ident, generics: &def.generics, variants })
+    ValueEnumImpl { ident: &input.ident, generics: &input.generics, variants }
 }
 
 struct ValueEnumImpl<'i> {

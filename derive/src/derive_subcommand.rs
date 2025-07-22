@@ -1,30 +1,42 @@
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote, quote_spanned};
-use syn::{DeriveInput, Ident, Type};
+use syn::{Data, DataEnum, DeriveInput, Ident, Type};
 
 use crate::common::{CommandMeta, wrap_anon_item};
 use crate::derive_args::ParserStateDefImpl;
-use crate::error::{Result, catch_errors};
+use crate::error::catch_errors;
 use syn::spanned::Spanned;
 
-pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
-    let mut tts = match catch_errors(|| expand_impl(input)) {
-        Ok(out) => return wrap_anon_item(out),
-        Err(err) => err,
-    };
+pub fn expand(input: &DeriveInput) -> TokenStream {
+    assert_no_generics!(input);
 
-    let name = &input.ident;
-    tts.extend(wrap_anon_item(quote! {
+    match catch_errors(|| match &input.data {
+        Data::Enum(data) => Ok(wrap_anon_item(expand_for_enum(input, data))),
+        Data::Struct(_) => abort!(
+            Span::call_site(),
+            "structs are only supported by `derive(Args)`, not by `derive(Subcommand)`",
+        ),
+        _ => abort!(Span::call_site(), "only enums are supported"),
+    }) {
+        Ok(out) => out,
+        Err(mut tts) => {
+            tts.extend(wrap_anon_item(fallback(&input.ident)));
+            tts
+        }
+    }
+}
+
+fn fallback(ident: &Ident) -> TokenStream {
+    quote! {
         #[automatically_derived]
-        impl __rt::Subcommand for #name {}
+        impl __rt::Subcommand for #ident {}
 
         #[automatically_derived]
-        impl __rt::Sealed for #name {}
+        impl __rt::Sealed for #ident {}
 
         #[automatically_derived]
-        impl __rt::CommandInternal for #name {}
-    }));
-    tts
+        impl __rt::CommandInternal for #ident {}
+    }
 }
 
 struct SubcommandImpl<'i> {
@@ -66,15 +78,7 @@ impl ToTokens for VariantImpl<'_> {
     }
 }
 
-fn expand_impl(def: &DeriveInput) -> Result<SubcommandImpl<'_>> {
-    let syn::Data::Enum(data) = &def.data else {
-        abort!(Span::call_site(), "derive(Subcommand) can only be used on enums");
-    };
-
-    if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
-        abort!(Span::call_site(), "TODO: generics are not supported yet");
-    }
-
+fn expand_for_enum<'a>(def: &'a DeriveInput, data: &'a DataEnum) -> SubcommandImpl<'a> {
     let enum_name = &def.ident;
     let mut state_defs = Vec::with_capacity(data.variants.len());
 
@@ -111,7 +115,8 @@ fn expand_impl(def: &DeriveInput) -> Result<SubcommandImpl<'_>> {
                         state_name.clone(),
                         enum_name.to_token_stream(),
                         fields,
-                    );
+                    )
+                    .ok()?;
                     state.output_ctor = Some(quote!(#enum_name :: #variant_name));
                     state_defs.push(state);
                     VariantImpl::Struct { state_ident: state_name }
@@ -121,7 +126,7 @@ fn expand_impl(def: &DeriveInput) -> Result<SubcommandImpl<'_>> {
         })
         .collect::<Vec<_>>();
 
-    Ok(SubcommandImpl { enum_name, state_defs, variants })
+    SubcommandImpl { enum_name, state_defs, variants }
 }
 
 impl ToTokens for SubcommandImpl<'_> {

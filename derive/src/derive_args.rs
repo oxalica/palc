@@ -4,7 +4,7 @@ use std::num::NonZero;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{DeriveInput, Ident, LitChar, LitStr, Visibility};
+use syn::{Data, DeriveInput, Fields, FieldsNamed, Ident, LitChar, LitStr, Visibility};
 
 use crate::common::{
     ArgOrCommand, ArgTyKind, ArgsCommandMeta, CommandMeta, Doc, FieldPath, Override, TY_OPTION,
@@ -13,96 +13,57 @@ use crate::common::{
 use crate::error::{Result, catch_errors};
 use crate::shared::{AcceptHyphen, ArgAttrs};
 
-pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
-    let mut tts = match catch_errors(|| expand_args_impl(input, is_parser)) {
-        Ok(out) => return wrap_anon_item(out),
-        Err(tts) => tts,
-    };
+pub fn expand(input: &DeriveInput) -> TokenStream {
+    assert_no_generics!(input);
 
-    // Error fallback impl.
-    let name = &input.ident;
-    tts.extend(wrap_anon_item(quote! {
-        #[automatically_derived]
-        impl __rt::Parser for #name {}
+    match catch_errors(|| match &input.data {
+        Data::Struct(syn::DataStruct { fields: Fields::Named(fields), .. }) => {
+            try_expand_for_named_struct(input, fields)
+        }
+        _ => abort!(Span::call_site(), "only structs with named fields are supported"),
+    }) {
+        Ok(tts) => wrap_anon_item(tts),
+        Err(mut tts) => {
+            tts.extend(wrap_anon_item(fallback(&input.ident)));
+            tts
+        }
+    }
+}
 
+fn fallback(ident: &Ident) -> TokenStream {
+    quote! {
         #[automatically_derived]
-        impl __rt::Args for #name {
-            type __State = __rt::FallbackState<#name>;
+        impl __rt::Args for #ident {
+            type __State = __rt::FallbackState<#ident>;
         }
 
         #[automatically_derived]
-        impl __rt::CommandInternal for #name {}
+        impl __rt::Sealed for #ident {}
+    }
+}
+
+pub fn try_expand_for_named_struct(
+    input: &DeriveInput,
+    fields: &FieldsNamed,
+) -> Result<TokenStream> {
+    let ident = &input.ident;
+    let cmd_meta = CommandMeta::parse_attrs(&input.attrs);
+    let state_name = format_ident!("{}State", input.ident);
+    let struct_name = input.ident.to_token_stream();
+    let state = expand_state_def_impl(&input.vis, Some(cmd_meta), state_name, struct_name, fields)?;
+    let state_name = &state.state_name;
+
+    Ok(quote! {
+        #state
 
         #[automatically_derived]
-        impl __rt::Sealed for #name {}
-    }));
-    tts
-}
-
-/// For `derive({Args,Parser})`.
-pub struct ArgsImpl<'i> {
-    is_parser: bool,
-    state: ParserStateDefImpl<'i>,
-}
-
-fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> Result<ArgsImpl<'_>> {
-    let syn::Data::Struct(syn::DataStruct { fields: syn::Fields::Named(fields), .. }) = &def.data
-    else {
-        abort!(
-            Span::call_site(),
-            "derive(Args) and derive(Parser) can only be used on named structs"
-        );
-    };
-
-    if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
-        abort!(def.ident, "TODO: generics are not supported yet");
-    }
-
-    let cmd_meta = CommandMeta::parse_attrs(&def.attrs);
-
-    if u8::try_from(fields.named.len()).is_err() {
-        abort!(def.ident, "derive(Args) only supports up to 255 fields");
-    }
-
-    let state_name = format_ident!("{}State", def.ident);
-    let struct_name = def.ident.to_token_stream();
-    let state = expand_state_def_impl(&def.vis, Some(cmd_meta), state_name, struct_name, fields);
-
-    Ok(ArgsImpl { is_parser, state })
-}
-
-impl ToTokens for ArgsImpl<'_> {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let struct_name = &self.state.output_ty;
-        let state_name = &self.state.state_name;
-        let state = &self.state;
-
-        if self.is_parser {
-            tokens.extend(quote! {
-                #[automatically_derived]
-                impl __rt::Parser for #struct_name {}
-
-                #[automatically_derived]
-                impl __rt::CommandInternal for #struct_name {
-                    fn feed_subcommand(_: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
-                        __rt::Some(__rt::try_parse_state::<<Self as __rt::Args>::__State>)
-                    }
-                }
-            });
+        impl __rt::Args for #ident {
+            type __State = #state_name;
         }
 
-        tokens.extend(quote! {
-            #[automatically_derived]
-            impl __rt::Args for #struct_name {
-                type __State = #state_name;
-            }
-
-            #[automatically_derived]
-            impl __rt::Sealed for #struct_name {}
-
-            #state
-        });
-    }
+        #[automatically_derived]
+        impl __rt::Sealed for #ident {}
+    })
 }
 
 pub struct ParserStateDefImpl<'i> {
@@ -251,15 +212,19 @@ pub fn expand_state_def_impl<'i>(
     state_name: Ident,
     output_ty: TokenStream,
     input_fields: &'i syn::FieldsNamed,
-) -> ParserStateDefImpl<'i> {
-    let input_fields = &input_fields.named;
+) -> Result<ParserStateDefImpl<'i>> {
+    let fields = &input_fields.named;
+
+    if u8::try_from(fields.len()).is_err() {
+        abort!(input_fields, "only up to 255 fields are supported");
+    }
 
     let mut out = ParserStateDefImpl {
         vis,
         state_name,
         output_ty,
         output_ctor: None,
-        fields: Vec::with_capacity(input_fields.len()),
+        fields: Vec::with_capacity(fields.len()),
         flatten_fields: Vec::new(),
         subcommand: None,
 
@@ -286,7 +251,7 @@ pub fn expand_state_def_impl<'i>(
         }
     };
 
-    for field in input_fields {
+    for field in fields {
         let attrs = ArgOrCommand::parse_attrs(&field.attrs);
         let ident = field.ident.as_ref().expect("named struct");
         let ident_str = ident.to_string();
@@ -593,7 +558,7 @@ pub fn expand_state_def_impl<'i>(
         }
     }
 
-    out
+    Ok(out)
 }
 
 impl ToTokens for ParserStateDefImpl<'_> {

@@ -64,3 +64,23 @@ pub fn catch_errors<T>(f: impl FnOnce() -> Result<T>) -> Result<T, TokenStream> 
         (Err(()), None) => unreachable!(),
     }
 }
+
+// Hard error without fallback. Most of our traits requires `'static`
+// and cannot be implemented even in fallback impl.
+macro_rules! assert_no_generics {
+    ($input:expr) => {
+        if let Err(err) = crate::error::check_no_generics(&$input.generics) {
+            return err;
+        }
+    };
+}
+
+pub fn check_no_generics(generics: &syn::Generics) -> Result<(), TokenStream> {
+    if generics.params.is_empty()
+        && generics.where_clause.as_ref().is_none_or(|w| w.predicates.is_empty())
+    {
+        Ok(())
+    } else {
+        Err(syn::Error::new(Span::call_site(), "generics are not supported").into_compile_error())
+    }
+}
