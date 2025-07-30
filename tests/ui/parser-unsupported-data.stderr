@@ -1,0 +1,31 @@
+error: only structs with named fields are supported yet
+ --> tests/ui/parser-unsupported-data.rs:3:10
+  |
+3 | #[derive(Parser)]
+  |          ^^^^^^
+  |
+  = note: this error originates in the derive macro `Parser` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: only structs with named fields are supported yet
+ --> tests/ui/parser-unsupported-data.rs:6:10
+  |
+6 | #[derive(Parser)]
+  |          ^^^^^^
+  |
+  = note: this error originates in the derive macro `Parser` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: only structs with named fields are supported yet
+ --> tests/ui/parser-unsupported-data.rs:9:10
+  |
+9 | #[derive(Parser)]
+  |          ^^^^^^
+  |
+  = note: this error originates in the derive macro `Parser` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: only structs with named fields are supported yet
+  --> tests/ui/parser-unsupported-data.rs:15:10
+   |
+15 | #[derive(Parser)]
+   |          ^^^^^^
+   |
+   = note: this error originates in the derive macro `Parser` (in Nightly builds, run with -Z macro-backtrace for more info)

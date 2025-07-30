@@ -1,0 +1,23 @@
+error: generics are not supported
+ --> tests/ui/no-generic.rs:1:10
+  |
+1 | #[derive(palc::Parser)]
+  |          ^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `palc::Parser` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: generics are not supported
+ --> tests/ui/no-generic.rs:6:10
+  |
+6 | #[derive(palc::Args)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: generics are not supported
+  --> tests/ui/no-generic.rs:11:10
+   |
+11 | #[derive(palc::Subcommand)]
+   |          ^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the derive macro `palc::Subcommand` (in Nightly builds, run with -Z macro-backtrace for more info)

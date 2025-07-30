@@ -1,0 +1,37 @@
+error: structs are only supported by `derive(Args)`, not by `derive(Subcommand)`
+ --> tests/ui/subcommand-unsupported-data.rs:3:10
+  |
+3 | #[derive(Subcommand)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Subcommand` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: structs are only supported by `derive(Args)`, not by `derive(Subcommand)`
+ --> tests/ui/subcommand-unsupported-data.rs:6:10
+  |
+6 | #[derive(Subcommand)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Subcommand` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: structs are only supported by `derive(Args)`, not by `derive(Subcommand)`
+ --> tests/ui/subcommand-unsupported-data.rs:9:10
+  |
+9 | #[derive(Subcommand)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Subcommand` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: only enums are supported
+  --> tests/ui/subcommand-unsupported-data.rs:14:10
+   |
+14 | #[derive(Subcommand)]
+   |          ^^^^^^^^^^
+   |
+   = note: this error originates in the derive macro `Subcommand` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0412]: cannot find type `Enum` in this scope
+  --> tests/ui/subcommand-unsupported-data.rs:24:5
+   |
+24 |     Enum: Subcommand;
+   |     ^^^^ not found in this scope
