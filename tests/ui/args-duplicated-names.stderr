@@ -1,0 +1,23 @@
+error: duplicated argument names
+ --> tests/ui/args-duplicated-names.rs:6:5
+  |
+6 |     hell: i32,
+  |     ^^^^
+
+error: previously defined here
+ --> tests/ui/args-duplicated-names.rs:4:5
+  |
+4 |     hello: i32,
+  |     ^^^^^
+
+error: duplicated argument names
+  --> tests/ui/args-duplicated-names.rs:10:18
+   |
+10 |     #[arg(long = "long1")]
+   |                  ^^^^^^^
+
+error: previously defined here
+ --> tests/ui/args-duplicated-names.rs:9:5
+  |
+9 |     long1: i32,
+  |     ^^^^^

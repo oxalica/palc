@@ -171,7 +171,7 @@ fn encode_long_name(name: &LitStr) -> String {
             name,
             r#"arg(long) name is automatically prefixed by "--", and you should not add more "-" prefix"#,
         );
-    } else if s.contains(|c: char| c == '=' && c.is_ascii_control()) {
+    } else if s.contains(|c: char| c == '=' || c.is_ascii_control()) {
         emit_error!(name, "arg(long) name must NOT contain '=' or ASCII control characters");
     }
     if s.len() > 1 {
@@ -191,10 +191,10 @@ fn encode_short_name(name: &LitChar) -> String {
         // `ArgsIter::next_arg()`.
         emit_error!(
             name,
-            r#"Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \
-                A unicode codepoint is not necessarity a "character" in human sense, thus \
-                automatic splitting or argument de-bundling may give unexpected results. \
-                If you do want this to be supported, convince us by opening an issue."#,
+            "Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \
+            A unicode codepoint is not necessarity a \"character\" in human sense, thus \
+            automatic splitting or argument de-bundling may give unexpected results. \
+            If you do want this to be supported, convince us by opening an issue.",
         );
     }
     c.into()
@@ -608,7 +608,9 @@ impl ToTokens for ParserStateDefImpl<'_> {
         }
         for &FlattenFieldInfo { ident, effective_ty } in &self.flatten_fields {
             field_names.push(ident);
-            field_tys.push(quote! { <#effective_ty as __rt::Args>::__State });
+            field_tys.push(
+                quote_spanned! {effective_ty.span()=> <#effective_ty as __rt::Args>::__State },
+            );
             field_inits.push(quote! { __rt::ParserState::init() });
             field_finishes.push(quote! { __rt::ParserState::finish(&mut self.#ident)? });
         }

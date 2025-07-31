@@ -26,7 +26,13 @@ pub trait ParserInternal: Sized {
 /// Trait of argument structs, for composition.
 ///
 /// This trait is in not public API. Only `derive(Args)` is.
+#[diagnostic::on_unimplemented(
+    message = "cannot flatten `{Self}` which is not a `palc::Args`",
+    label = "this type is expected to have `derive(palc::Args)` but it is not"
+)]
+#[doc(hidden)]
 pub trait Args: Sized + 'static {
+    #[doc(hidden)]
     type __State: ParserState<Output = Self>;
 }
 
@@ -469,6 +475,11 @@ impl Args for () {
 /// Trait of subcommand enums.
 ///
 /// This trait is in not public API. Only `derive(Subcommand)` is.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a `palc::Subcommand`",
+    label = "this type is expected to have `derive(palc::Subcommand)` but it is not"
+)]
+#[doc(hidden)]
 pub trait Subcommand: Sized + 'static {
     const SUBCOMMANDS: &'static str = "";
     const SUBCOMMAND_DOCS: &'static [&'static str] = &[];

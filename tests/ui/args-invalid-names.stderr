@@ -1,0 +1,41 @@
+error: arg(long) name must NOT be empty
+ --> tests/ui/args-invalid-names.rs:3:18
+  |
+3 |     #[arg(long = "")]
+  |                  ^^
+
+error: arg(long) name must NOT contain '=' or ASCII control characters
+ --> tests/ui/args-invalid-names.rs:5:18
+  |
+5 |     #[arg(long = "\0")]
+  |                  ^^^^
+
+error: arg(long) name is automatically prefixed by "--", and you should not add more "-" prefix
+ --> tests/ui/args-invalid-names.rs:7:18
+  |
+7 |     #[arg(long = "-foo")]
+  |                  ^^^^^^
+
+error: arg(long) name must NOT contain '=' or ASCII control characters
+ --> tests/ui/args-invalid-names.rs:9:18
+  |
+9 |     #[arg(long = "a=b")]
+  |                  ^^^^^
+
+error: arg(short) name must NOT be '-' or ASCII control characters
+  --> tests/ui/args-invalid-names.rs:12:19
+   |
+12 |     #[arg(short = '-')]
+   |                   ^^^
+
+error: Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. A unicode codepoint is not necessarity a "character" in human sense, thus automatic splitting or argument de-bundling may give unexpected results. If you do want this to be supported, convince us by opening an issue.
+  --> tests/ui/args-invalid-names.rs:14:19
+   |
+14 |     #[arg(short = '坏')]
+   |                   ^^^^
+
+error: Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. A unicode codepoint is not necessarity a "character" in human sense, thus automatic splitting or argument de-bundling may give unexpected results. If you do want this to be supported, convince us by opening an issue.
+  --> tests/ui/args-invalid-names.rs:17:5
+   |
+17 |     首字符Unicode: i32,
+   |     ^^^^^^^^^^^^^

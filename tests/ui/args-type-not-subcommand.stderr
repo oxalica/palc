@@ -1,0 +1,41 @@
+error[E0277]: `Deep` is not a `palc::Subcommand`
+ --> tests/ui/args-type-not-subcommand.rs:4:11
+  |
+4 |     deep: Deep,
+  |           ^^^^ this type is expected to have `derive(palc::Subcommand)` but it is not
+  |
+  = help: the trait `Subcommand` is not implemented for `Deep`
+note: required by a bound in `GetSubcommand::Subcommand`
+ --> src/runtime.rs
+  |
+  |     type Subcommand: Subcommand;
+  |                      ^^^^^^^^^^ required by this bound in `GetSubcommand::Subcommand`
+
+error[E0277]: `Subargs` is not a `palc::Subcommand`
+  --> tests/ui/args-type-not-subcommand.rs:12:10
+   |
+12 |     cmd: Subargs,
+   |          ^^^^^^^ this type is expected to have `derive(palc::Subcommand)` but it is not
+   |
+   = help: the trait `Subcommand` is not implemented for `Subargs`
+note: required by a bound in `GetSubcommand::Subcommand`
+  --> src/runtime.rs
+   |
+   |     type Subcommand: Subcommand;
+   |                      ^^^^^^^^^^ required by this bound in `GetSubcommand::Subcommand`
+
+error[E0277]: `Deep` is not a `palc::Subcommand`
+ --> tests/ui/args-type-not-subcommand.rs:4:11
+  |
+4 |     deep: Deep,
+  |           ^^^^ this type is expected to have `derive(palc::Subcommand)` but it is not
+  |
+  = help: the trait `Subcommand` is not implemented for `Deep`
+
+error[E0277]: `Subargs` is not a `palc::Subcommand`
+  --> tests/ui/args-type-not-subcommand.rs:12:10
+   |
+12 |     cmd: Subargs,
+   |          ^^^^^^^ this type is expected to have `derive(palc::Subcommand)` but it is not
+   |
+   = help: the trait `Subcommand` is not implemented for `Subargs`
