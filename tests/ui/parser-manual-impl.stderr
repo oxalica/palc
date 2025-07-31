@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `Cli: ParserInternal` is not satisfied
+ --> tests/ui/parser-manual-impl.rs:5:17
+  |
+5 | impl Parser for Cli {}
+  |                 ^^^ the trait `ParserInternal` is not implemented for `Cli`
+  |
+note: required by a bound in `Parser`
+ --> src/lib.rs
+  |
+  | pub trait Parser: ParserInternal + Sized + 'static {
+  |                   ^^^^^^^^^^^^^^ required by this bound in `Parser`

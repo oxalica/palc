@@ -1,4 +1,4 @@
-use palc::Subcommand;
+use palc::{__private::Subcommand, Subcommand};
 
 #[derive(Subcommand)]
 struct Unit;

@@ -36,9 +36,6 @@ fn fallback(ident: &Ident) -> TokenStream {
         impl __rt::Args for #ident {
             type __State = __rt::FallbackState<#ident>;
         }
-
-        #[automatically_derived]
-        impl __rt::Sealed for #ident {}
     }
 }
 
@@ -60,9 +57,6 @@ pub fn try_expand_for_named_struct(
         impl __rt::Args for #ident {
             type __State = #state_name;
         }
-
-        #[automatically_derived]
-        impl __rt::Sealed for #ident {}
     })
 }
 
@@ -823,7 +817,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
                 // It seems impossible to somehow return it by partly erase the subcommand type.
                 if !__is_last
-                    && <#effective_ty as __rt::CommandInternal>::feed_subcommand(__arg.as_os_str()).is_some()
+                    && <#effective_ty as __rt::Subcommand>::feed_subcommand(__arg.as_os_str()).is_some()
                 {
                     return __rt::place_for_subcommand::<__Subcommand>(self);
                 }
@@ -1028,8 +1022,8 @@ impl ToTokens for RawArgsInfo<'_> {
             let ty = &s.effective_ty;
             (
                 s.optional,
-                quote! { <#ty as __rt::CommandInternal>::SUBCOMMANDS },
-                quote! { <#ty as __rt::CommandInternal>::SUBCOMMAND_DOCS },
+                quote! { <#ty as __rt::Subcommand>::SUBCOMMANDS },
+                quote! { <#ty as __rt::Subcommand>::SUBCOMMAND_DOCS },
             )
         } else {
             (false, quote! { "" }, quote! { &[] })

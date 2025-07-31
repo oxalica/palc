@@ -1,4 +1,4 @@
-use palc::Args;
+use palc::{__private::Args, Args};
 
 #[derive(Args)]
 struct Unit;

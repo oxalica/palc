@@ -9,11 +9,10 @@
 //!
 //! TODO: Documentations.
 #![forbid(unsafe_code)]
-use std::ffi::OsString;
-use std::path::PathBuf;
+use std::{ffi::OsString, path::Path};
 
 use error::ErrorKind;
-use runtime::{ArgsIter, CommandInternal, ParserState};
+use runtime::{ArgsIter, ParserInternal};
 
 mod error;
 mod refl;
@@ -28,7 +27,6 @@ mod help;
 pub use palc_derive::{Args, Parser, Subcommand, ValueEnum};
 
 pub use crate::error::Error;
-use crate::runtime::{ParserChain, Sealed};
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Not public API. Only for proc-macro internal use.
@@ -56,13 +54,14 @@ pub mod __private {
 
     pub use crate::refl::RawArgsInfo;
     pub use crate::shared::{AcceptHyphen, ArgAttrs};
-    pub use crate::{Args, Parser, Result, Subcommand};
+    pub use crate::{Parser, Result};
 }
 
 /// Top-level command interface.
 ///
-/// Users should only get an implementation via [`derive(Parser)`](macro@Parser).
-pub trait Parser: Sized + CommandInternal + Sealed + 'static {
+/// You should only get an implementation via [`derive(Parser)`](macro@Parser).
+/// Do not manually implement this trait.
+pub trait Parser: ParserInternal + Sized + 'static {
     fn parse() -> Self {
         match Self::try_parse_from(std::env::args_os()) {
             Ok(v) => v,
@@ -79,7 +78,9 @@ pub trait Parser: Sized + CommandInternal + Sealed + 'static {
         T: Into<OsString> + Clone,
     {
         let mut iter = iter.into_iter().map(|s| s.into());
-        try_parse_from_command(&mut iter)
+        let arg0 = iter.next().ok_or(ErrorKind::MissingArg0)?;
+        let program_name = Path::new(&arg0).file_name().unwrap_or(arg0.as_ref());
+        Self::__parse_toplevel(program_name, &mut ArgsIter::new(&mut iter))
     }
 
     #[cfg(feature = "help")]
@@ -91,28 +92,3 @@ pub trait Parser: Sized + CommandInternal + Sealed + 'static {
             .unwrap()
     }
 }
-
-fn try_parse_from_command<C: CommandInternal>(
-    iter: &mut dyn Iterator<Item = OsString>,
-) -> Result<C> {
-    let arg0 = PathBuf::from(iter.next().ok_or(ErrorKind::MissingArg0)?);
-    // A non-UTF8 program name does not matter in help. Multi-call commands will fail anyway.
-    let program_name = arg0.file_name().unwrap_or(arg0.as_ref());
-    let args = &mut ArgsIter::new(iter);
-    let states: &mut dyn ParserChain = &mut ();
-    CommandInternal::try_parse_with_name(args, program_name, states)
-}
-
-/// A group of arguments for composing larger interface.
-///
-/// Users should only get an implementation via [`derive(Args)`](macro@Args).
-pub trait Args: Sized + Sealed + 'static {
-    /// Not public API. Only for proc-macro internal use.
-    #[doc(hidden)]
-    type __State: ParserState<Output = Self>;
-}
-
-/// A subcommand enum.
-///
-/// Users should only get an implementation via [`derive(Subcommand)`](macro@Subcommand).
-pub trait Subcommand: Sized + CommandInternal + Sealed + 'static {}

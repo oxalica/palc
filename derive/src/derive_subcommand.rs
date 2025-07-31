@@ -30,12 +30,6 @@ fn fallback(ident: &Ident) -> TokenStream {
     quote! {
         #[automatically_derived]
         impl __rt::Subcommand for #ident {}
-
-        #[automatically_derived]
-        impl __rt::Sealed for #ident {}
-
-        #[automatically_derived]
-        impl __rt::CommandInternal for #ident {}
     }
 }
 
@@ -154,13 +148,7 @@ impl ToTokens for SubcommandImpl<'_> {
             #(#state_defs)*
 
             #[automatically_derived]
-            impl __rt::Sealed for #enum_name {}
-
-            #[automatically_derived]
-            impl __rt::Subcommand for #enum_name {}
-
-            #[automatically_derived]
-            impl __rt::CommandInternal for #enum_name {
+            impl __rt::Subcommand for #enum_name {
                 const SUBCOMMANDS: &'static __rt::str = #subcmds;
                 const SUBCOMMAND_DOCS: &'static [&'static __rt::str] = &[#(#subcmd_docs),*];
 

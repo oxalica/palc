@@ -7,17 +7,28 @@ use std::ops::ControlFlow;
 use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
 
+use crate::Result;
 use crate::error::ErrorKind;
 use crate::refl::RawArgsInfo;
 use crate::shared::{AcceptHyphen, ArgAttrs};
 use crate::values::ArgValueInfo;
-use crate::{Args, Result, Subcommand};
 
 use super::Error;
 
-// The fake sealed trait to show in docs.
-// Proc-macro can still generate its impl.
-pub trait Sealed {}
+/// The implementation detail of [`crate::Parser`].
+/// Not in public API.
+#[doc(hidden)]
+pub trait ParserInternal: Sized {
+    #[doc(hidden)]
+    fn __parse_toplevel(program: &OsStr, args: &mut ArgsIter<'_>) -> Result<Self>;
+}
+
+/// Trait of argument structs, for composition.
+///
+/// This trait is in not public API. Only `derive(Args)` is.
+pub trait Args: Sized + 'static {
+    type __State: ParserState<Output = Self>;
+}
 
 #[macro_export]
 #[doc(hidden)]
@@ -454,9 +465,11 @@ impl ParserStateDyn for () {}
 impl Args for () {
     type __State = ();
 }
-impl Sealed for () {}
 
-pub trait CommandInternal: Sized {
+/// Trait of subcommand enums.
+///
+/// This trait is in not public API. Only `derive(Subcommand)` is.
+pub trait Subcommand: Sized + 'static {
     const SUBCOMMANDS: &'static str = "";
     const SUBCOMMAND_DOCS: &'static [&'static str] = &[];
 
@@ -476,7 +489,7 @@ pub trait CommandInternal: Sized {
     }
 }
 
-/// The fn signature of [`try_parse_state`], returned by [`CommandInternal::feed_subcommand`].
+/// The fn signature of [`try_parse_state`], returned by [`Subcommand::feed_subcommand`].
 pub type FeedSubcommand<T> =
     Option<fn(args: &mut ArgsIter<'_>, subcmd: &OsStr, states: &mut dyn ParserChain) -> Result<T>>;
 
