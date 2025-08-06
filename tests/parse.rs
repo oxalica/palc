@@ -1,5 +1,5 @@
 use expect_test::{Expect, expect};
-use palc_derive::{Args, Parser, Subcommand};
+use palc::{Args, Parser, Subcommand};
 use std::{ffi::OsString, fmt::Debug};
 
 #[derive(Debug, Parser)]

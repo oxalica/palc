@@ -1,5 +1,4 @@
-use palc::Parser as _;
-use palc_derive::{Parser, ValueEnum};
+use palc::{Parser, ValueEnum};
 
 #[allow(dead_code)]
 #[path = "./util/criterion.rs"]

@@ -1,5 +1,4 @@
-use palc::Parser as _;
-use palc_derive::Parser;
+use palc::Parser;
 
 #[allow(dead_code)]
 #[path = "./util/simple.rs"]

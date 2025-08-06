@@ -1,5 +1,4 @@
-use palc::Parser as _;
-use palc_derive::{Args, Parser, Subcommand, ValueEnum};
+use palc::{Args, Parser, Subcommand, ValueEnum};
 
 #[path = "./util/deno.rs"]
 mod cli;

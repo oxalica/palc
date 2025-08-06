@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use palc::Parser as _;
-use palc_derive::{Args, Parser, Subcommand, ValueEnum};
+use palc::{Args, Parser, Subcommand, ValueEnum};
 
 /// My great App.
 #[derive(Debug, PartialEq, Parser)]

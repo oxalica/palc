@@ -21,24 +21,18 @@ categories.workspace = true
 keywords.workspace = true
 
 [features]
-default = ["derive", "help"]
+default = ["help"]
 help = []
-derive = ["dep:palc-derive"]
 
 [dependencies]
 os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_os_str"] }
+palc-derive = { path = "./derive", version = "=0.0.1" }
 ref-cast = "1.0.24"
-
-[dependencies.palc-derive]
-path = "./derive"
-version = "=0.0.1"
-optional = true
 
 [dev-dependencies]
 argh = { version = "0.1.13", default-features = false }
 clap = { version = "4.5.35", default-features = false, features = ["std", "derive", "error-context", "help", "usage"] }
 expect-test = "1.5.1"
-palc-derive.path = "./derive"
 trybuild = "1.0.108"
 
 [lints.clippy]

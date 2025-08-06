@@ -23,7 +23,6 @@ mod values;
 #[cfg(feature = "help")]
 mod help;
 
-#[cfg(feature = "derive")]
 pub use palc_derive::{Args, Parser, Subcommand, ValueEnum};
 
 pub use crate::error::Error;

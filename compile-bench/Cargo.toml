@@ -8,4 +8,4 @@ publish = false # Only for local testing.
 help = ["palc/default"]
 
 [dependencies]
-palc = { path = "..", default-features = false, features = ["derive"] }
+palc = { path = "..", default-features = false }
