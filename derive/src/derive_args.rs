@@ -616,6 +616,32 @@ impl ToTokens for ParserStateDefImpl<'_> {
             field_finishes.push(quote! { __rt::ParserState::finish(&mut self.#ident)? });
         }
 
+        // Assertions to be forced to evaluate.
+        let mut asserts = TokenStream::new();
+        for FlattenFieldInfo { effective_ty, .. } in &self.flatten_fields {
+            asserts.extend(quote_spanned! {effective_ty.span()=>
+                __rt::assert!(
+                    <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
+                    "TODO: cannot arg(flatten) positional arguments yet",
+                );
+                __rt::assert!(
+                    !<<#effective_ty as __rt::Args>::__State as __rt::ParserState>::HAS_SUBCOMMAND,
+                    "cannot flatten an Args with subcommand",
+                );
+            });
+        }
+        for &idx in &self.named_fields {
+            let FieldInfo { effective_ty, attrs, .. } = &self.fields[idx];
+            if attrs.make_lowercase {
+                asserts.extend(quote_spanned! {effective_ty.span()=>
+                    __rt::assert!(
+                        <#effective_ty as __rt::ValueEnum>::NO_UPPER_CASE,
+                        "`arg(ignore_case)` only supports `ValueEnum` that contains no UPPERCASE variants"
+                    );
+                });
+            }
+        }
+
         let feed_named_func = FeedNamedImpl(self);
         let feed_unnamed_func = FeedUnnamedImpl(self);
         let validation = ValidationImpl(self);
@@ -623,6 +649,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
 
         let raw_args_info = RawArgsInfo(self);
+        let has_subcommand = self.subcommand.is_some();
 
         let self_arg_cnt = self.fields.len() as u8;
         let self_unnamed_arg_cnt = self.unnamed_fields.len() as u8;
@@ -639,6 +666,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 type Output = #output_ty;
 
                 const RAW_ARGS_INFO: __rt::RawArgsInfo = #raw_args_info;
+                const HAS_SUBCOMMAND: __rt::bool = #has_subcommand;
 
                 const TOTAL_ARG_CNT: __rt::u8 = #self_arg_cnt
                     #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*;
@@ -669,6 +697,9 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     &<Self as __rt::ParserState>::RAW_ARGS_INFO
                 }
             }
+
+            // The result is wrapped in a `const _: () = { .. }`, which forces evaluation.
+            #asserts
         });
     }
 }
@@ -683,26 +714,6 @@ impl ToTokens for FeedNamedImpl<'_> {
         if def.named_fields.is_empty() && def.flatten_fields.is_empty() {
             return;
         }
-
-        let asserts = def
-            .named_fields
-            .iter()
-            .map(|&idx| {
-                let FieldInfo { effective_ty, attrs, .. } = &def.fields[idx];
-                if attrs.make_lowercase {
-                    quote! {
-                        const {
-                            __rt::assert!(
-                                <#effective_ty as __rt::ValueEnum>::NO_UPPER_CASE,
-                                "`arg(ignore_case)` only supports `ValueEnum` that contains no UPPERCASE variants"
-                            )
-                        }
-                    }
-                } else {
-                    TokenStream::new()
-                }
-            })
-            .collect::<TokenStream>();
 
         let arms = def
             .named_fields
@@ -764,7 +775,6 @@ impl ToTokens for FeedNamedImpl<'_> {
 
         tokens.extend(quote! {
             fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
-                #asserts
                 #body
             }
         });
@@ -785,19 +795,6 @@ impl ToTokens for FeedUnnamedImpl<'_> {
         {
             return;
         }
-
-        let asserts = def
-            .flatten_fields
-            .iter()
-            .map(|FlattenFieldInfo { effective_ty, .. }| quote_spanned! {effective_ty.span()=>
-                const {
-                    __rt::assert!(
-                        <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
-                        "TODO: cannot arg(flatten) positional arguments yet",
-                    );
-                }
-            })
-            .collect::<TokenStream>();
 
         let handle_subcmd = if let Some(SubcommandInfo { ident, effective_ty, .. }) =
             &def.subcommand
@@ -878,7 +875,6 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 __idx: __rt::usize,
                 __is_last: __rt::bool,
             ) -> __rt::FeedUnnamed {
-                #asserts
                 #handle_last
                 #handle_subcmd
                 #non_last
@@ -987,25 +983,15 @@ impl ToTokens for RawArgsInfo<'_> {
         } else {
             let tys1 = self.0.flatten_fields.iter().map(|f| f.effective_ty);
             let tys2 = tys1.clone();
-            let mut asserts = TokenStream::new();
-            for ty in tys1.clone() {
-                asserts.extend(quote_spanned! {ty.span()=>
-                    __rt::assert!(
-                        !<<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.has_subcommand(),
-                        "cannot flatten an Args with subcommand",
-                    );
-                });
-            }
             // FIXME: This duplicates strings quadratically, especially when a large
             // `impl Args` is flattened in many places like in the `deno-palc` example.
             (
-                quote! {{
-                    #asserts
+                quote! {
                     __rt::__const_concat!(
                         #descs,
                         #(<<#tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_descriptions(),)*
                     )
-                }},
+                },
                 quote! {
                     __rt::__const_concat!(
                         #helps,

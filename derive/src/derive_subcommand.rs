@@ -161,6 +161,8 @@ impl ToTokens for SubcommandImpl<'_> {
                     [#(#cmd_docs),*],
                 );
 
+                // If there is no variant.
+                #[allow(unreachable_code)]
                 fn feed_subcommand(__name: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
                     __rt::Some(match __name.to_str() {
                         __rt::Some(__name) => match __name {

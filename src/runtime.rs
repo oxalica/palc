@@ -394,6 +394,8 @@ pub trait ParserState: ParserStateDyn {
     type Output;
 
     const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
+    /// For proc-macro to reject flattening an `impl Args` with subcommands.
+    const HAS_SUBCOMMAND: bool = false;
 
     const TOTAL_ARG_CNT: u8 = 0;
     const TOTAL_UNNAMED_ARG_CNT: u8 = 0;

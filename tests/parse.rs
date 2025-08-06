@@ -526,3 +526,19 @@ fn constraint() {
         &Required { key: vec!["foo".into()], files: vec!["path".into()], force: true, verbose: 2 },
     )
 }
+
+#[test]
+#[deny(unreachable_code)]
+fn empty_subcommand() {
+    #[derive(Debug, Parser, PartialEq)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: Option<Subcmd>,
+    }
+
+    #[derive(Debug, Subcommand, PartialEq)]
+    enum Subcmd {}
+
+    check([""], &Cli { cmd: None });
+    check_err::<Cli>(["", ""], expect!["unrecognized subcommand ''"]);
+}

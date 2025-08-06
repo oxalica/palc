@@ -1,0 +1,5 @@
+error[E0080]: evaluation of constant value failed
+ --> tests/ui/args-flatten-subcommand.rs:6:12
+  |
+6 |     inner: Inner,
+  |            ^^^^^ evaluation panicked: cannot flatten an Args with subcommand

@@ -101,18 +101,6 @@ impl RawArgsInfo {
         }
     }
 
-    // Used by proc-macro for assertion in flattening.
-    pub const fn has_subcommand(&self) -> bool {
-        #[cfg(feature = "help")]
-        {
-            self.subcmd_info.is_some()
-        }
-        #[cfg(not(feature = "help"))]
-        {
-            false
-        }
-    }
-
     // Used by proc-macro for concatenation.
     pub const fn raw_descriptions(&self) -> &str {
         self.descriptions

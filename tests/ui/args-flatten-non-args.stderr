@@ -1,5 +1,5 @@
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
- --> tests/ui/args-type-not-args.rs:7:11
+ --> tests/ui/args-flatten-non-args.rs:7:11
   |
 7 |     deep: Deep,
   |           ^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -11,7 +11,7 @@ error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
             Cli2
 
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
- --> tests/ui/args-type-not-args.rs:5:8
+ --> tests/ui/args-flatten-non-args.rs:5:8
   |
 5 | struct Cli1 {
   |        ^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -22,7 +22,7 @@ error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
             Cli1
             Cli2
 note: required because it appears within the type `Cli1State`
- --> tests/ui/args-type-not-args.rs:5:8
+ --> tests/ui/args-flatten-non-args.rs:5:8
   |
 5 | struct Cli1 {
   |        ^^^^
@@ -33,7 +33,7 @@ note: required by a bound in `palc::__private::Args::__State`
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Args::__State`
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
-  --> tests/ui/args-type-not-args.rs:15:11
+  --> tests/ui/args-flatten-non-args.rs:15:11
    |
 15 |     deep: Subcmd,
    |           ^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -45,7 +45,7 @@ error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
              Cli2
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
-  --> tests/ui/args-type-not-args.rs:13:8
+  --> tests/ui/args-flatten-non-args.rs:13:8
    |
 13 | struct Cli2 {
    |        ^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -56,7 +56,7 @@ error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
              Cli1
              Cli2
 note: required because it appears within the type `Cli2State`
-  --> tests/ui/args-type-not-args.rs:13:8
+  --> tests/ui/args-flatten-non-args.rs:13:8
    |
 13 | struct Cli2 {
    |        ^^^^
@@ -67,7 +67,7 @@ note: required by a bound in `palc::__private::Args::__State`
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Args::__State`
 
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
- --> tests/ui/args-type-not-args.rs:4:10
+ --> tests/ui/args-flatten-non-args.rs:4:10
   |
 4 | #[derive(palc::Args)]
   |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -78,7 +78,7 @@ error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
             Cli1
             Cli2
 note: required because it appears within the type `Cli1State`
- --> tests/ui/args-type-not-args.rs:5:8
+ --> tests/ui/args-flatten-non-args.rs:5:8
   |
 5 | struct Cli1 {
   |        ^^^^
@@ -86,7 +86,7 @@ note: required because it appears within the type `Cli1State`
   = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
-  --> tests/ui/args-type-not-args.rs:12:10
+  --> tests/ui/args-flatten-non-args.rs:12:10
    |
 12 | #[derive(palc::Args)]
    |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -97,7 +97,7 @@ error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
              Cli1
              Cli2
 note: required because it appears within the type `Cli2State`
-  --> tests/ui/args-type-not-args.rs:13:8
+  --> tests/ui/args-flatten-non-args.rs:13:8
    |
 13 | struct Cli2 {
    |        ^^^^
@@ -105,7 +105,7 @@ note: required because it appears within the type `Cli2State`
    = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
- --> tests/ui/args-type-not-args.rs:4:10
+ --> tests/ui/args-flatten-non-args.rs:4:10
   |
 4 | #[derive(palc::Args)]
   |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -118,7 +118,7 @@ error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
   = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
-  --> tests/ui/args-type-not-args.rs:12:10
+  --> tests/ui/args-flatten-non-args.rs:12:10
    |
 12 | #[derive(palc::Args)]
    |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
@@ -129,15 +129,3 @@ error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
              Cli1
              Cli2
    = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: unreachable call
-  --> tests/ui/args-type-not-args.rs:18:10
-   |
-18 | #[derive(palc::Subcommand)]
-   |          ^^^^^^^^^^^^^^^^
-   |          |
-   |          unreachable call
-   |          any code following this `match` expression is unreachable, as all arms diverge
-   |
-   = note: `#[warn(unreachable_code)]` on by default
-   = note: this warning originates in the derive macro `palc::Subcommand` (in Nightly builds, run with -Z macro-backtrace for more info)
