@@ -1,3 +1,4 @@
+#![cfg(feature = "help")]
 #![expect(dead_code, reason = "only for help generation")]
 use expect_test::{Expect, expect};
 use palc::{Args, Parser, Subcommand};

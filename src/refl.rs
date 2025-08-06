@@ -8,20 +8,24 @@
 #![cfg_attr(not(feature = "default"), allow(unused))]
 
 /// Runtime information of a enum of subcommands.
+#[cfg(feature = "help")]
 #[derive(Debug)]
 pub struct RawSubcommandInfo<A: ?Sized = [&'static str]> {
     /// Zero or more NUL-terminated subcommand names.
     subcommands: &'static str,
+
     /// `RawArgsInfo::cmd_doc` of each subcommand.
     cmd_docs: A,
 }
 
+#[cfg(feature = "help")]
 impl RawSubcommandInfo<[&'static str; 0]> {
     pub(crate) const fn empty() -> Self {
-        Self { subcommands: "", cmd_docs: [] }
+        Self::new("", [])
     }
 }
 
+#[cfg(feature = "help")]
 impl<const N: usize> RawSubcommandInfo<[&'static str; N]> {
     // Used by proc-macro.
     pub const fn new(subcommands: &'static str, cmd_docs: [&'static str; N]) -> Self {
@@ -29,12 +33,32 @@ impl<const N: usize> RawSubcommandInfo<[&'static str; N]> {
     }
 }
 
+#[cfg(not(feature = "help"))]
+pub struct RawSubcommandInfo(());
+
+#[cfg(not(feature = "help"))]
+impl RawSubcommandInfo {
+    pub(crate) const fn empty() -> Self {
+        Self(())
+    }
+
+    pub const fn new<const N: usize>(_: &'static str, _: [&'static str; N]) -> Self {
+        Self(())
+    }
+}
+
 #[derive(Debug)]
 pub struct RawArgsInfo {
+    /// Zero or more '\0'-terminated argument descriptions, either:
+    /// "-s", "--long", "-s, --long=<VALUE>", "<REQUIRED>", or "[OPTIONAL]".
+    descriptions: &'static str,
+
     /// Is the child subcommand optional or required? Only useful if there are subcommands.
+    #[cfg(feature = "help")]
     subcmd_optional: bool,
 
     /// Child subcommands.
+    #[cfg(feature = "help")]
     subcmd_info: Option<&'static RawSubcommandInfo>,
 
     /// The documentation about this command applet.
@@ -42,19 +66,17 @@ pub struct RawArgsInfo {
     /// This consists of '\0'-separated following elements:
     /// - long_about
     /// - after_long_help
+    #[cfg(feature = "help")]
     cmd_doc: &'static str,
 
-    /// Zero or more '\0'-terminated argument descriptions, either:
-    /// "-s", "--long", "-s, --long=<VALUE>", "<REQUIRED>", or "[OPTIONAL]".
-    descriptions: &'static str,
-
     /// Zero or more '\0'-terminated argument help strings, in the same order of `descriptions`.
+    #[cfg(feature = "help")]
     helps: &'static str,
 }
 
 impl RawArgsInfo {
     pub(crate) const fn empty() -> Self {
-        Self { subcmd_optional: false, subcmd_info: None, cmd_doc: "", descriptions: "", helps: "" }
+        Self::new(false, None, "", "", "")
     }
 
     // Used by proc-macro.
@@ -65,12 +87,30 @@ impl RawArgsInfo {
         descriptions: &'static str,
         helps: &'static str,
     ) -> Self {
-        Self { subcmd_optional, subcmd_info, cmd_doc, descriptions, helps }
+        Self {
+            descriptions,
+
+            #[cfg(feature = "help")]
+            subcmd_optional,
+            #[cfg(feature = "help")]
+            subcmd_info,
+            #[cfg(feature = "help")]
+            cmd_doc,
+            #[cfg(feature = "help")]
+            helps,
+        }
     }
 
     // Used by proc-macro for assertion in flattening.
     pub const fn has_subcommand(&self) -> bool {
-        self.subcmd_info.is_some()
+        #[cfg(feature = "help")]
+        {
+            self.subcmd_info.is_some()
+        }
+        #[cfg(not(feature = "help"))]
+        {
+            false
+        }
     }
 
     // Used by proc-macro for concatenation.
@@ -80,14 +120,29 @@ impl RawArgsInfo {
 
     // Used by proc-macro for concatenation.
     pub const fn raw_helps(&self) -> &str {
-        self.helps
+        #[cfg(feature = "help")]
+        {
+            self.helps
+        }
+        #[cfg(not(feature = "help"))]
+        {
+            ""
+        }
     }
 
     // Used by proc-macro for construction of `RawSubcommandInfo`.
     pub const fn raw_cmd_docs(&self) -> &str {
-        self.cmd_doc
+        #[cfg(feature = "help")]
+        {
+            self.cmd_doc
+        }
+        #[cfg(not(feature = "help"))]
+        {
+            ""
+        }
     }
 
+    #[cfg(feature = "help")]
     pub(crate) fn doc(&self) -> CommandDoc {
         let [long_about, after_long_help] = split_sep_many(self.cmd_doc, b'\0').unwrap_or([""; 2]);
         CommandDoc { long_about, after_long_help }
@@ -98,6 +153,7 @@ impl RawArgsInfo {
         split_terminator(self.descriptions, b'\0').nth(idx.into())
     }
 
+    #[cfg(feature = "help")]
     fn args(&self) -> impl Iterator<Item = ArgInfo> {
         // See `RawArgsInfo`.
         split_terminator(self.descriptions, b'\0')
@@ -105,15 +161,18 @@ impl RawArgsInfo {
             .filter_map(|(desc, raw_help)| ArgInfo::from_raw(desc, raw_help))
     }
 
+    #[cfg(feature = "help")]
     pub(crate) fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
         self.args().filter_map(ArgInfo::to_named)
     }
 
+    #[cfg(feature = "help")]
     pub(crate) fn unnamed_args(&self) -> impl Iterator<Item = UnnamedArgInfo> {
         self.args().filter_map(ArgInfo::to_unnamed)
     }
 
     /// Iterate over subcommands and short descriptions.
+    #[cfg(feature = "help")]
     pub(crate) fn subcommands(
         &self,
     ) -> Option<impl Iterator<Item = (&'static str, &'static str)> + Clone> {
@@ -123,6 +182,7 @@ impl RawArgsInfo {
         ))
     }
 
+    #[cfg(feature = "help")]
     pub(crate) fn subcommand_optional(&self) -> bool {
         self.subcmd_optional
     }
