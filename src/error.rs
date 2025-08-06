@@ -218,8 +218,13 @@ impl Error {
         e
     }
 
-    pub(crate) fn into_help(self) -> Option<String> {
-        self.0.help
+    /// Render the help string if this error indicates a `--help` is encounered.
+    ///
+    /// # Errors
+    ///
+    /// If this error is not about help or feature "help" is disabled, `Err(self)` is returned.
+    pub fn try_into_help(mut self) -> Result<String, Self> {
+        if let Some(help) = self.0.help.take() { Ok(help) } else { Err(self) }
     }
 
     pub(crate) fn with_source(mut self, source: DynStdError) -> Self {

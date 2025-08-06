@@ -88,7 +88,7 @@ pub trait Parser: ParserInternal + Sized + 'static {
         Self::try_parse_from([argv0.into().into(), OsString::from("--help")])
             .err()
             .unwrap()
-            .into_help()
+            .try_into_help()
             .unwrap()
     }
 }

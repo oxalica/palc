@@ -43,9 +43,8 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
     // About this (sub)command.
     let doc = info.doc();
     if !doc.long_about.is_empty() {
-        w!(doc.long_about, "\n");
+        w!(doc.long_about, "\n\n");
     }
-    w!("\n");
 
     // Usage of current subcommand path.
 
