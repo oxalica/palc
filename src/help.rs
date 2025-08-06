@@ -5,8 +5,8 @@ fn push_str(out: &mut String, s: &str) {
     out.push_str(s);
 }
 
-fn collect_subcmds(out: &mut Vec<(String, RawArgsInfo)>, chain: ParserChainNode) {
-    let (_, info) = chain.state.metadata();
+fn collect_subcmds(out: &mut Vec<(String, &'static RawArgsInfo)>, chain: ParserChainNode) {
+    let info = chain.state.info();
     let cmd_name = chain.cmd_name.to_string_lossy().into_owned();
     out.push((cmd_name, info));
     if let Some(deep) = chain.ancestors.out() {
@@ -41,9 +41,9 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
     let info = path.last().unwrap().1;
 
     // About this (sub)command.
-    let cmd_doc = info.doc().expect("doc is enabled");
-    if let Some(about) = cmd_doc.long_about() {
-        w!(about, "\n");
+    let doc = info.doc();
+    if !doc.long_about.is_empty() {
+        w!(doc.long_about, "\n");
     }
     w!("\n");
 
@@ -77,27 +77,27 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         has_unnamed = true;
         w!(" ", arg.description());
     }
-    let has_subcmd = info.subcommands().next().is_some();
-    if has_subcmd {
-        w!(if info.is_subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" });
+    let subcmds = info.subcommands();
+    if subcmds.is_some() {
+        w!(if info.subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" });
     }
     w!("\n");
 
     // List of commands.
 
-    if has_subcmd {
+    if let Some(subcmds) = subcmds {
         w!("\nCommands:\n");
         let pad = "                        ";
-        let max_len = info.subcommands().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
+        let max_len = subcmds.clone().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
 
         // Note: Only short help is displayed for the subcommand list.
-        for (cmd, doc) in info.subcommands() {
+        for (cmd, long_about) in subcmds {
             w!("    ", cmd);
-            if let Some(help) = doc.long_about() {
-                let short_help = help.split_terminator('\n').next().unwrap_or(help);
+            if !long_about.is_empty() {
+                let short_about = long_about.split_terminator('\n').next().unwrap_or(long_about);
                 let pad_len = max_len.saturating_sub(cmd.len()) + 2;
                 let pad = &pad[..pad.len().min(pad_len)];
-                w!("", pad, short_help);
+                w!("", pad, short_about);
             }
             w!("\n");
         }
@@ -146,7 +146,7 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         }
     }
 
-    if let Some(after) = cmd_doc.after_long_help() {
-        w!(after);
+    if !doc.after_long_help.is_empty() {
+        w!(doc.after_long_help);
     }
 }

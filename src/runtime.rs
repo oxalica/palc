@@ -9,7 +9,7 @@ use ref_cast::RefCast;
 
 use crate::Result;
 use crate::error::ErrorKind;
-use crate::refl::RawArgsInfo;
+use crate::refl::{RawArgsInfo, RawSubcommandInfo};
 use crate::shared::{AcceptHyphen, ArgAttrs};
 use crate::values::ArgValueInfo;
 
@@ -19,7 +19,6 @@ use super::Error;
 /// Not in public API.
 #[doc(hidden)]
 pub trait ParserInternal: Sized {
-    #[doc(hidden)]
     fn __parse_toplevel(program: &OsStr, args: &mut ArgsIter<'_>) -> Result<Self>;
 }
 
@@ -117,6 +116,7 @@ impl<T: 'static> ParserState for FallbackState<T> {
     type Output = T;
 
     const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
+
     const TOTAL_ARG_CNT: u8 = 0;
     const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
 
@@ -284,11 +284,14 @@ pub trait ParserChain {
 }
 
 impl dyn ParserChain + '_ {
-    fn feed_named(&mut self, enc_name: &str) -> GlobalFeedNamed<'_> {
+    fn feed_named(
+        &mut self,
+        enc_name: &str,
+    ) -> ControlFlow<(&mut dyn ArgPlace, ArgAttrs, &'static RawArgsInfo)> {
         let Some(node) = self.out() else { return ControlFlow::Continue(()) };
-        let raw_arg_descs = node.state.metadata().1.__arg_descs;
+        let info = node.state.info();
         if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name) {
-            return ControlFlow::Break((place, attrs, raw_arg_descs));
+            return ControlFlow::Break((place, attrs, info));
         }
         node.ancestors.feed_named(enc_name)
     }
@@ -384,18 +387,13 @@ pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnam
 /// So we can `?` in generated code of `command(flatten)`.
 pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs)>;
 
-/// Additionally include the original raw arg descriptions for error messages.
-type GlobalFeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs, &'static str)>;
-
 /// This should be an enum, but be this for `?` support, which is unstable to impl.
 pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Error>>;
 
 pub trait ParserState: ParserStateDyn {
     type Output;
 
-    // This is stored by-value, because we only want to promote it to
-    // `&'static [RawArgsInfo]` after processing all `command(flatten)`.
-    const RAW_ARGS_INFO: RawArgsInfo;
+    const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
 
     const TOTAL_ARG_CNT: u8 = 0;
     const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
@@ -443,10 +441,9 @@ pub trait ParserStateDyn: 'static {
         Err(None)
     }
 
-    /// -> (unnamed_accept_hyphen, raw_arg_descs)
-    // FIXME: This interface is ugly and forces `RAW_ARGS_INFO` into rodata.
-    fn metadata(&self) -> (AcceptHyphen, RawArgsInfo) {
-        (AcceptHyphen::No, RawArgsInfo::empty())
+    /// Runtime reflection.
+    fn info(&self) -> &'static RawArgsInfo {
+        &const { RawArgsInfo::empty() }
     }
 }
 
@@ -455,8 +452,6 @@ pub trait ParserStateDyn: 'static {
 /// We still need to fully consume the input for global arguments and error reporting.
 impl ParserState for () {
     type Output = ();
-
-    const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
 
     fn init() -> Self {}
 
@@ -481,8 +476,7 @@ impl Args for () {
 )]
 #[doc(hidden)]
 pub trait Subcommand: Sized + 'static {
-    const SUBCOMMANDS: &'static str = "";
-    const SUBCOMMAND_DOCS: &'static [&'static str] = &[];
+    const RAW_INFO: &'static RawSubcommandInfo = &RawSubcommandInfo::empty();
 
     fn feed_subcommand(_name: &OsStr) -> FeedSubcommand<Self> {
         None
@@ -530,31 +524,26 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
     while let Some(arg) = args.next_arg(&mut buf)? {
         match arg {
             Arg::EncodedNamed(enc_name, has_eq, value) => {
-                let (place, attrs, raw_arg_descs) =
-                    match <dyn ParserChain>::feed_named(chain, enc_name) {
-                        ControlFlow::Break(ret) => ret,
-                        ControlFlow::Continue(()) => {
-                            let (unnamed_accept_hyphen, _) = chain.state.metadata();
-                            if unnamed_accept_hyphen != AcceptHyphen::No {
-                                todo!()
-                            }
-
-                            // TODO: Configurable help?
-                            #[cfg(feature = "help")]
-                            if enc_name == "h" || enc_name == "help" {
-                                return Err(Error::from(ErrorKind::Help).maybe_render_help(chain));
-                            }
-                            let mut dec_name = String::with_capacity(2 + enc_name.len());
-                            // TODO: Dedup this code with `Error::fmt`.
-                            if enc_name.chars().nth(1).is_none() {
-                                dec_name.push('-');
-                            } else if !enc_name.starts_with("--") {
-                                dec_name.push_str("--");
-                            }
-                            dec_name.push_str(enc_name);
-                            return Err(ErrorKind::UnknownNamedArgument.with_input(dec_name.into()));
+                let (place, attrs, args_info) = match <dyn ParserChain>::feed_named(chain, enc_name)
+                {
+                    ControlFlow::Break(ret) => ret,
+                    ControlFlow::Continue(()) => {
+                        // TODO: Configurable help?
+                        #[cfg(feature = "help")]
+                        if enc_name == "h" || enc_name == "help" {
+                            return Err(Error::from(ErrorKind::Help).maybe_render_help(chain));
                         }
-                    };
+                        let mut dec_name = String::with_capacity(2 + enc_name.len());
+                        // TODO: Dedup this code with `Error::fmt`.
+                        if enc_name.chars().nth(1).is_none() {
+                            dec_name.push('-');
+                        } else if !enc_name.starts_with("--") {
+                            dec_name.push_str("--");
+                        }
+                        dec_name.push_str(enc_name);
+                        return Err(ErrorKind::UnknownNamedArgument.with_input(dec_name.into()));
+                    }
+                };
 
                 if attrs.num_values == 0 {
                     // Only fail on long arguments with inlined values `--long=value`.
@@ -586,8 +575,7 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
                 .map_err(
                     #[cold]
                     |err| {
-                        let desc =
-                            RawArgsInfo::arg_descriptions_of(raw_arg_descs).nth(attrs.index.into());
+                        let desc = args_info.get_description(attrs.index);
                         err.with_arg_desc(desc).maybe_render_help(chain)
                     },
                 )?;

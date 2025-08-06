@@ -52,7 +52,7 @@ pub mod __private {
     // Used by `__arg_value_info!`
     pub use crate::values::{ArgValueInfo, InferValueParser, ValueEnum};
 
-    pub use crate::refl::RawArgsInfo;
+    pub use crate::refl::{RawArgsInfo, RawSubcommandInfo};
     pub use crate::shared::{AcceptHyphen, ArgAttrs};
     pub use crate::{Parser, Result};
 }

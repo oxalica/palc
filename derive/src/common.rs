@@ -311,28 +311,28 @@ pub struct CommandMeta {
 
     pub name: Option<LitStr>,
     pub version: Option<Override<VerbatimExpr>>,
-    pub author: Option<Override<VerbatimExpr>>,
-    pub about: Option<Override<VerbatimExpr>>,
     pub long_about: Option<Override<VerbatimExpr>>,
-    pub after_help: Option<VerbatimExpr>,
     pub after_long_help: Option<VerbatimExpr>,
-    // TODO: verbatim_doc_comment, next_display_order, next_help_heading, rename_all{,_env}
+    // TODO: bin_name, verbatim_doc_comment, next_display_order, next_help_heading, rename_all{,_env}
 }
 
 impl CommandMeta {
-    pub fn parse_attrs(attrs: &[Attribute]) -> Box<Self> {
+    pub fn parse_attrs_opt(attrs: &[Attribute]) -> Option<Box<Self>> {
         let mut doc = Doc::default();
-        let mut this = <Box<Self>>::default();
+        let mut this: Option<Box<Self>> = None;
         for attr in attrs {
             doc.extend_from_attr(attr);
             if attr.path().is_ident("command") {
+                let this = this.get_or_insert_default();
                 try_syn(attr.parse_nested_meta(|meta| this.parse_update(&meta)));
             } else if attr.path().is_ident("arg") {
-                emit_error!(attr, "only `command(..)` is allowed on the whole struct or enum");
+                emit_error!(attr, "only `command(..)` is allowed in this location");
             }
         }
         doc.post_process();
-        this.doc = doc;
+        if !doc.0.is_empty() {
+            this.get_or_insert_default().doc = doc;
+        }
         this
     }
 
@@ -344,16 +344,33 @@ impl CommandMeta {
             self.name.set_once(span, meta.value()?.parse()?);
         } else if path.is_ident("version") {
             self.version.set_once(span, meta.input.parse()?);
-        } else if path.is_ident("author") {
-            self.author.set_once(span, meta.input.parse()?);
-        } else if path.is_ident("about") {
-            self.about.set_once(span, meta.input.parse()?);
         } else if path.is_ident("long_about") {
             self.long_about.set_once(span, meta.input.parse()?);
-        } else if path.is_ident("after_help") {
-            self.after_help.set_once(span, meta.value()?.parse()?);
         } else if path.is_ident("after_long_help") {
             self.after_long_help.set_once(span, meta.value()?.parse()?);
+        } else if path.is_ident("author") {
+            meta.input.parse::<Override<VerbatimExpr>>()?;
+            emit_error!(
+                span,
+                "`command(author)` is NOT supported. \
+                It is useless without custom help template anyway."
+            );
+        } else if path.is_ident("about") {
+            meta.input.parse::<Override<VerbatimExpr>>()?;
+            emit_error!(
+                span,
+                "custom short-about `command(about)` is NOT supported yet. \
+                It always use the first line of `command(long_about)` (or doc-comments). \
+                Please use `command(long_about)` (or doc-comments) instead.",
+            );
+        } else if path.is_ident("after_help") {
+            meta.input.parse::<Override<VerbatimExpr>>()?;
+            emit_error!(
+                span,
+                "custom after-short-help `command(after_help)` is NOT supported yet. \
+                It always use the first line of `command(after_long_help)`. \
+                Please use `command(after_long_help)`  instead.",
+            );
         } else if path.is_ident("term_width") || path.is_ident("max_term_width") {
             meta.value()?.parse::<syn::Expr>()?;
             emit_error!(
@@ -627,10 +644,6 @@ impl Doc {
         } else {
             emit_error!(m.value, "only literal doc comment is supported yet");
         }
-    }
-
-    pub fn summary(&self) -> &str {
-        self.0.split_once('\n').unwrap_or((&self.0, "")).0
     }
 }
 

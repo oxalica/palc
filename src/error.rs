@@ -5,10 +5,7 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use crate::{
-    refl::RawArgsInfo,
-    runtime::{ParserChainNode, ParserState},
-};
+use crate::runtime::{ParserChainNode, ParserState};
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
 /// This implies either `UserErr: std::error::Error` or it is string-like.
@@ -273,8 +270,7 @@ impl ErrorKind {
 
     #[cold]
     pub(crate) fn with_arg_idx<S: ParserState>(self, arg_idx: u8) -> Error {
-        Error::new(self).with_arg_desc(
-            RawArgsInfo::arg_descriptions_of(S::RAW_ARGS_INFO.__arg_descs).nth(arg_idx.into()),
-        )
+        let desc = S::RAW_ARGS_INFO.get_description(arg_idx);
+        Error::new(self).with_arg_desc(desc)
     }
 }

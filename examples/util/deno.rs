@@ -38,7 +38,7 @@ To evaluate code in the shell:
 #[derive(Parser, Debug, Clone)]
 #[command(
   name = "deno",
-  after_help = ENV_VARIABLES_HELP,
+  after_long_help = ENV_VARIABLES_HELP,
   long_about = DENO_HELP,
 )]
 pub struct Opt {

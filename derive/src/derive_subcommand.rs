@@ -16,7 +16,7 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
             Span::call_site(),
             "structs are only supported by `derive(Args)`, not by `derive(Subcommand)`",
         ),
-        _ => abort!(Span::call_site(), "only enums are supported"),
+        Data::Union(_) => abort!(Span::call_site(), "only enums are supported"),
     }) {
         Ok(out) => out,
         Err(mut tts) => {
@@ -36,27 +36,32 @@ fn fallback(ident: &Ident) -> TokenStream {
 struct SubcommandImpl<'i> {
     enum_name: &'i Ident,
     state_defs: Vec<ParserStateDefImpl<'i>>,
-    // (name, kind)
-    variants: Vec<(String, VariantImpl<'i>)>,
+    variants: Vec<VariantImpl<'i>>,
 }
 
-enum VariantImpl<'i> {
+struct VariantImpl<'i> {
+    arg_name: String,
+    cmd_meta: Option<Box<CommandMeta>>,
+    kind: VariantKind<'i>,
+}
+
+enum VariantKind<'i> {
     Unit { ident: &'i Ident },
     Tuple { ident: &'i Ident, ty: &'i Type },
     Struct { state_ident: Ident },
 }
 
-impl ToTokens for VariantImpl<'_> {
+impl ToTokens for VariantKind<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.extend(match self {
+        tokens.extend(match &self {
             // Consume all rest args, possibly feed global arguments.
-            VariantImpl::Unit { ident: variant_name } => quote! {
+            Self::Unit { ident: variant_name } => quote! {
                 |__args, __cmd_name, __ancestors| {
                     __rt::try_parse_state::<()>(__args, __cmd_name, __ancestors)?;
                     __rt::Ok(Self::#variant_name)
                 }
             },
-            VariantImpl::Tuple { ident: variant_name, ty } => quote_spanned! {ty.span()=>
+            Self::Tuple { ident: variant_name, ty } => quote_spanned! {ty.span()=>
                 |__args, __cmd_name, __ancestors| {
                     __rt::Ok(Self::#variant_name(__rt::try_parse_state::<<#ty as __rt::Args>::__State>(
                         __args,
@@ -65,7 +70,7 @@ impl ToTokens for VariantImpl<'_> {
                     )?))
                 }
             },
-            VariantImpl::Struct { state_ident: state_name } => quote! {
+            Self::Struct { state_ident: state_name, .. } => quote! {
                 __rt::try_parse_state::<#state_name>
             },
         });
@@ -82,12 +87,9 @@ fn expand_for_enum<'a>(def: &'a DeriveInput, data: &'a DataEnum) -> SubcommandIm
         .filter_map(|variant| {
             let variant_name = &variant.ident;
             let arg_name = heck::AsKebabCase(variant_name.to_string()).to_string();
-            // TODO: Should this also include enum attributes?
-            let act = match &variant.fields {
-                syn::Fields::Unit => {
-                    // TODO: Handle `command()` here.
-                    VariantImpl::Unit { ident: variant_name }
-                }
+            let cmd_meta = CommandMeta::parse_attrs_opt(&variant.attrs);
+            let kind = match &variant.fields {
+                syn::Fields::Unit => VariantKind::Unit { ident: variant_name },
                 syn::Fields::Unnamed(fields) => {
                     if fields.unnamed.len() != 1 {
                         emit_error!(
@@ -96,27 +98,34 @@ fn expand_for_enum<'a>(def: &'a DeriveInput, data: &'a DataEnum) -> SubcommandIm
                         );
                         return None;
                     }
-                    // TODO: Handle or reject `command()` here.
-                    VariantImpl::Tuple { ident: variant_name, ty: &fields.unnamed[0].ty }
+                    if cmd_meta.is_some() {
+                        emit_error!(
+                            variant_name,
+                            "`#[command(..)]` or doc-comments are ignored for newtype variants. \
+                            Attributes on the inner type of this variant will be used instead."
+                        );
+                    }
+                    VariantKind::Tuple { ident: variant_name, ty: &fields.unnamed[0].ty }
                 }
                 syn::Fields::Named(fields) => {
-                    let cmd_meta = CommandMeta::parse_attrs(&variant.attrs);
                     let state_name =
                         format_ident!("{enum_name}{variant_name}State", span = variant_name.span());
+
                     let mut state = crate::derive_args::expand_state_def_impl(
                         &def.vis,
-                        Some(cmd_meta),
+                        None,
                         state_name.clone(),
                         enum_name.to_token_stream(),
                         fields,
                     )
                     .ok()?;
-                    state.output_ctor = Some(quote!(#enum_name :: #variant_name));
+                    state.output_ctor = Some(quote! { #enum_name :: #variant_name });
                     state_defs.push(state);
-                    VariantImpl::Struct { state_ident: state_name }
+                    VariantKind::Struct { state_ident: state_name }
                 }
             };
-            Some((arg_name, act))
+
+            Some(VariantImpl { arg_name, cmd_meta, kind })
         })
         .collect::<Vec<_>>();
 
@@ -126,21 +135,19 @@ fn expand_for_enum<'a>(def: &'a DeriveInput, data: &'a DataEnum) -> SubcommandIm
 impl ToTokens for SubcommandImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self { enum_name, state_defs, variants } = self;
-        let name_strs = variants.iter().map(|(name, _)| name);
-        let cases = variants.iter().map(|(_, v)| v);
+        let arg_strs = variants.iter().map(|v| &v.arg_name);
+        let cases = variants.iter().map(|v| &v.kind);
 
-        let subcmds = name_strs.clone().flat_map(|name| [name, "\0"]).collect::<String>();
-        let subcmd_docs = variants
+        let subcmds = arg_strs.clone().flat_map(|name| [name, "\0"]).collect::<String>();
+        let cmd_docs = variants
             .iter()
-            .map(|(_, v)| match v {
-                // TODO
-                VariantImpl::Unit { .. } => quote! { "" },
-                VariantImpl::Tuple { ty, .. } => quote! {
-                    <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__applet_doc
+            .map(|v| match &v.kind {
+                // Only forward to inner `#[command(..)]` on newtype variants.
+                VariantKind::Tuple { ty, .. } => quote! {
+                    <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_cmd_docs()
                 },
-                VariantImpl::Struct { state_ident } => quote! {
-                    <#state_ident as __rt::ParserState>::RAW_ARGS_INFO.__applet_doc
-                },
+                // Otherwise, use local doc-comment and attributes.
+                _ => crate::derive_args::CommandDoc(v.cmd_meta.as_deref()).to_token_stream(),
             })
             .collect::<Vec<TokenStream>>();
 
@@ -149,13 +156,15 @@ impl ToTokens for SubcommandImpl<'_> {
 
             #[automatically_derived]
             impl __rt::Subcommand for #enum_name {
-                const SUBCOMMANDS: &'static __rt::str = #subcmds;
-                const SUBCOMMAND_DOCS: &'static [&'static __rt::str] = &[#(#subcmd_docs),*];
+                const RAW_INFO: &'static __rt::RawSubcommandInfo = &__rt::RawSubcommandInfo::new(
+                    #subcmds,
+                    [#(#cmd_docs),*],
+                );
 
                 fn feed_subcommand(__name: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
                     __rt::Some(match __name.to_str() {
                         __rt::Some(__name) => match __name {
-                            #(#name_strs => #cases,)*
+                            #(#arg_strs => #cases,)*
                             _ => return __rt::None,
                         },
                         __rt::None => return __rt::None,

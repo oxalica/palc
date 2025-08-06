@@ -21,6 +21,7 @@ struct MyCli {
     command: Option<Commands>,
 }
 
+/// Configure something.
 #[derive(Debug, PartialEq, Args)]
 struct Config {
     #[arg(long)]
@@ -31,6 +32,7 @@ struct Config {
 
 #[derive(Debug, PartialEq, Subcommand)]
 enum Commands {
+    /// Do something complex
     Test {
         #[arg(short, long)]
         list: bool,
@@ -38,6 +40,7 @@ enum Commands {
         files: Option<Vec<PathBuf>>,
     },
     Transparent(Config),
+    /// Do something simple
     Unit,
 }
 

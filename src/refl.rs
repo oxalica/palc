@@ -1,69 +1,107 @@
-#![allow(dead_code, reason = "TODO")]
+//! Runtime reflection of arguments, subcommands and help strings.
+//! Required by precise error messages and help generations.
+//!
+//! Most of `&str` here can be changed to thin `&CStr`, which is blocked by extern types.
+//! WAIT: <https://github.com/rust-lang/rust/issues/43467>
+//!
+//! TODO(low): Decide whether to expose these API.
+#![cfg_attr(not(feature = "default"), allow(unused))]
 
-/// Description of a collection of arguments.
-///
-/// NB. This struct is constructed by proc-macro.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy)]
+/// Runtime information of a enum of subcommands.
+#[derive(Debug)]
+pub struct RawSubcommandInfo<A: ?Sized = [&'static str]> {
+    /// Zero or more NUL-terminated subcommand names.
+    subcommands: &'static str,
+    /// `RawArgsInfo::cmd_doc` of each subcommand.
+    cmd_docs: A,
+}
+
+impl RawSubcommandInfo<[&'static str; 0]> {
+    pub(crate) const fn empty() -> Self {
+        Self { subcommands: "", cmd_docs: [] }
+    }
+}
+
+impl<const N: usize> RawSubcommandInfo<[&'static str; N]> {
+    // Used by proc-macro.
+    pub const fn new(subcommands: &'static str, cmd_docs: [&'static str; N]) -> Self {
+        Self { subcommands, cmd_docs }
+    }
+}
+
+#[derive(Debug)]
 pub struct RawArgsInfo {
-    /// Zero or more `\0` terminated subcommand names.
-    pub __subcommands: &'static str,
+    /// Is the child subcommand optional or required? Only useful if there are subcommands.
+    subcmd_optional: bool,
 
-    /// Zero or more '\0'-terminated arg descriptions.
+    /// Child subcommands.
+    subcmd_info: Option<&'static RawSubcommandInfo>,
+
+    /// The documentation about this command applet.
     ///
-    /// For named arguments, their descriptions always starts with "-".
-    pub __arg_descs: &'static str,
+    /// This consists of '\0'-separated following elements:
+    /// - long_about
+    /// - after_long_help
+    cmd_doc: &'static str,
 
-    /// `__applet_doc` of each subcommands. Only used for help generation.
-    pub __subcommand_docs: &'static [&'static str],
+    /// Zero or more '\0'-terminated argument descriptions, either:
+    /// "-s", "--long", "-s, --long=<VALUE>", "<REQUIRED>", or "[OPTIONAL]".
+    descriptions: &'static str,
 
-    /// Zero or more '\0'-terminated arg help texts. Only used for help generation.
-    ///
-    /// Each raw `ArgInfo` can either be empty for hidden arguments, or consists
-    /// of following strings in order:
-    /// - `required as u8`.
-    /// - Help text.
-    pub __arg_helps: &'static str,
-
-    /// The first byte is '1' if there is an optional subcommand, otherwise '0'.
-    ///
-    /// If command doc is enabled, there are additionally NUL-separated elements
-    /// in following order:
-    /// - `name`
-    /// - `version`
-    /// - `about`
-    /// - `long_about`
-    /// - `long_help`
-    /// - `after_long_help`
-    pub __applet_doc: &'static str,
+    /// Zero or more '\0'-terminated argument help strings, in the same order of `descriptions`.
+    helps: &'static str,
 }
 
 impl RawArgsInfo {
-    // NB. Used by proc-macro.
-    pub const fn empty() -> Self {
-        Self {
-            __subcommands: "",
-            __arg_descs: "",
-
-            __subcommand_docs: &[],
-            __arg_helps: "",
-            __applet_doc: "",
-        }
+    pub(crate) const fn empty() -> Self {
+        Self { subcmd_optional: false, subcmd_info: None, cmd_doc: "", descriptions: "", helps: "" }
     }
 
-    // This is an associated function, to eliminate dependency to the whole
-    // struct if possible.
-    pub(crate) fn arg_descriptions_of(
-        arg_descs: &'static str,
-    ) -> impl Iterator<Item = &'static str> {
+    // Used by proc-macro.
+    pub const fn new(
+        subcmd_optional: bool,
+        subcmd_info: Option<&'static RawSubcommandInfo>,
+        cmd_doc: &'static str,
+        descriptions: &'static str,
+        helps: &'static str,
+    ) -> Self {
+        Self { subcmd_optional, subcmd_info, cmd_doc, descriptions, helps }
+    }
+
+    // Used by proc-macro for assertion in flattening.
+    pub const fn has_subcommand(&self) -> bool {
+        self.subcmd_info.is_some()
+    }
+
+    // Used by proc-macro for concatenation.
+    pub const fn raw_descriptions(&self) -> &str {
+        self.descriptions
+    }
+
+    // Used by proc-macro for concatenation.
+    pub const fn raw_helps(&self) -> &str {
+        self.helps
+    }
+
+    // Used by proc-macro for construction of `RawSubcommandInfo`.
+    pub const fn raw_cmd_docs(&self) -> &str {
+        self.cmd_doc
+    }
+
+    pub(crate) fn doc(&self) -> CommandDoc {
+        let [long_about, after_long_help] = split_sep_many(self.cmd_doc, b'\0').unwrap_or([""; 2]);
+        CommandDoc { long_about, after_long_help }
+    }
+
+    pub(crate) fn get_description(&self, idx: u8) -> Option<&'static str> {
         // See `RawArgsInfo`.
-        split_terminator(arg_descs, b'\0')
+        split_terminator(self.descriptions, b'\0').nth(idx.into())
     }
 
     fn args(&self) -> impl Iterator<Item = ArgInfo> {
         // See `RawArgsInfo`.
-        split_terminator(self.__arg_descs, b'\0')
-            .zip(split_terminator(self.__arg_helps, b'\0'))
+        split_terminator(self.descriptions, b'\0')
+            .zip(split_terminator(self.helps, b'\0'))
             .filter_map(|(desc, raw_help)| ArgInfo::from_raw(desc, raw_help))
     }
 
@@ -75,18 +113,25 @@ impl RawArgsInfo {
         self.args().filter_map(ArgInfo::to_unnamed)
     }
 
-    pub(crate) fn subcommands(&self) -> impl Iterator<Item = (&'static str, AppletDoc)> {
-        split_terminator(self.__subcommands, b'\0')
-            .zip(self.__subcommand_docs.iter().filter_map(|doc| AppletDoc::from_raw(doc)))
+    /// Iterate over subcommands and short descriptions.
+    pub(crate) fn subcommands(
+        &self,
+    ) -> Option<impl Iterator<Item = (&'static str, &'static str)> + Clone> {
+        let subcmd = self.subcmd_info?;
+        Some(split_terminator(subcmd.subcommands, b'\0').zip(
+            subcmd.cmd_docs.iter().map(|raw_doc| split_once(raw_doc, b'\0').unwrap_or(("", "")).0),
+        ))
     }
 
-    pub(crate) fn is_subcommand_optional(&self) -> bool {
-        self.__applet_doc.as_bytes().first() == Some(&b'1')
+    pub(crate) fn subcommand_optional(&self) -> bool {
+        self.subcmd_optional
     }
+}
 
-    pub(crate) fn doc(&self) -> Option<AppletDoc> {
-        AppletDoc::from_raw(self.__applet_doc)
-    }
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommandDoc {
+    pub(crate) long_about: &'static str,
+    pub(crate) after_long_help: &'static str,
 }
 
 /// Description of an arguments.
@@ -159,51 +204,6 @@ impl UnnamedArgInfo {
     }
 }
 
-/// Help and documentation of a command applet.
-#[derive(Debug, Clone, Copy)]
-pub struct AppletDoc {
-    name: &'static str,
-    version: &'static str,
-    about: &'static str,
-    long_about: &'static str,
-    after_help: &'static str,
-    after_long_help: &'static str,
-}
-
-impl AppletDoc {
-    #[inline(never)]
-    fn from_raw(raw: &'static str) -> Option<Self> {
-        // See `RawArgsInfo`.
-        let [name, version, about, long_about, after_help, after_long_help] =
-            split_sep_many(raw.get(1..)?, b'\0')?;
-        Some(AppletDoc { name, version, about, long_about, after_help, after_long_help })
-    }
-
-    pub fn name(&self) -> &str {
-        self.name
-    }
-
-    pub fn version(&self) -> Option<&str> {
-        opt(self.version)
-    }
-
-    pub fn about(&self) -> Option<&str> {
-        opt(self.about)
-    }
-
-    pub fn long_about(&self) -> Option<&str> {
-        opt(self.long_about)
-    }
-
-    pub fn after_help(&self) -> Option<&str> {
-        opt(self.after_help)
-    }
-
-    pub fn after_long_help(&self) -> Option<&str> {
-        opt(self.after_long_help)
-    }
-}
-
 fn opt(s: &str) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
@@ -225,7 +225,7 @@ fn split_sep_many<const N: usize>(mut s: &str, b: u8) -> Option<[&str; N]> {
     Some(arr)
 }
 
-fn split_terminator(mut s: &str, b: u8) -> impl Iterator<Item = &str> {
+fn split_terminator(mut s: &str, b: u8) -> impl Iterator<Item = &str> + Clone {
     assert!(b.is_ascii());
     std::iter::from_fn(move || {
         let (fst, rest) = split_once(s, b)?;

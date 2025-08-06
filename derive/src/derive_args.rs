@@ -44,10 +44,11 @@ pub fn try_expand_for_named_struct(
     fields: &FieldsNamed,
 ) -> Result<TokenStream> {
     let ident = &input.ident;
-    let cmd_meta = CommandMeta::parse_attrs(&input.attrs);
+    let cmd_meta = CommandMeta::parse_attrs_opt(&input.attrs);
     let state_name = format_ident!("{}State", input.ident);
     let struct_name = input.ident.to_token_stream();
-    let state = expand_state_def_impl(&input.vis, Some(cmd_meta), state_name, struct_name, fields)?;
+    let state =
+        expand_state_def_impl(&input.vis, cmd_meta.as_deref(), state_name, struct_name, fields)?;
     let state_name = &state.state_name;
 
     Ok(quote! {
@@ -79,7 +80,7 @@ pub struct ParserStateDefImpl<'i> {
     catchall_field: Option<CatchallFieldInfo>,
     last_field: Option<usize>,
 
-    cmd_meta: Option<Box<CommandMeta>>,
+    cmd_meta: Option<&'i CommandMeta>,
 }
 
 struct FieldInfo<'i> {
@@ -202,7 +203,7 @@ fn encode_short_name(name: &LitChar) -> String {
 
 pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
-    cmd_meta: Option<Box<CommandMeta>>,
+    cmd_meta: Option<&'i CommandMeta>,
     state_name: Ident,
     output_ty: TokenStream,
     input_fields: &'i syn::FieldsNamed,
@@ -621,11 +622,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
         let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
 
-        let unnamed_arg_accept_hyphen = self
-            .catchall_field
-            .as_ref()
-            .map_or(AcceptHyphen::No, |f| fields[f.field_idx].attrs.accept_hyphen);
-
         let raw_args_info = RawArgsInfo(self);
 
         let self_arg_cnt = self.fields.len() as u8;
@@ -669,8 +665,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 #feed_named_func
                 #feed_unnamed_func
 
-                fn metadata(&self) -> (__rt::AcceptHyphen, __rt::RawArgsInfo) {
-                    (#unnamed_arg_accept_hyphen, <Self as __rt::ParserState>::RAW_ARGS_INFO)
+                fn info(&self) -> &'static __rt::RawArgsInfo {
+                    &<Self as __rt::ParserState>::RAW_ARGS_INFO
                 }
             }
         });
@@ -975,20 +971,19 @@ struct RawArgsInfo<'a>(&'a ParserStateDefImpl<'a>);
 impl ToTokens for RawArgsInfo<'_> {
     // See format in `RawArgInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let arg_descs =
-            self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
+        let descs = self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
 
-        let mut arg_helps = String::new();
+        let mut helps = String::new();
         for f in &self.0.fields {
             if !f.hide {
-                arg_helps.push(if f.attrs.required { '1' } else { '0' });
-                arg_helps.push_str(&f.doc.0);
+                helps.push(if f.attrs.required { '1' } else { '0' });
+                helps.push_str(&f.doc.0);
             }
-            arg_helps.push('\0');
+            helps.push('\0');
         }
 
-        let (arg_descs, arg_helps) = if self.0.flatten_fields.is_empty() {
-            (quote!(#arg_descs), quote!(#arg_helps))
+        let (descs, helps) = if self.0.flatten_fields.is_empty() {
+            (quote!(#descs), quote!(#helps))
         } else {
             let tys1 = self.0.flatten_fields.iter().map(|f| f.effective_ty);
             let tys2 = tys1.clone();
@@ -996,7 +991,7 @@ impl ToTokens for RawArgsInfo<'_> {
             for ty in tys1.clone() {
                 asserts.extend(quote_spanned! {ty.span()=>
                     __rt::assert!(
-                        <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__subcommands.is_empty(),
+                        !<<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.has_subcommand(),
                         "cannot flatten an Args with subcommand",
                     );
                 });
@@ -1007,83 +1002,68 @@ impl ToTokens for RawArgsInfo<'_> {
                 quote! {{
                     #asserts
                     __rt::__const_concat!(
-                        #arg_descs,
-                        #(<<#tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__arg_descs,)*
+                        #descs,
+                        #(<<#tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_descriptions(),)*
                     )
                 }},
                 quote! {
                     __rt::__const_concat!(
-                        #arg_helps,
-                        #(<<#tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__arg_helps,)*
+                        #helps,
+                        #(<<#tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_helps(),)*
                     )
                 },
             )
         };
 
-        let (is_subcmd_optional, subcmds, subcmd_docs) = if let Some(s) = &self.0.subcommand {
-            let ty = &s.effective_ty;
-            (
-                s.optional,
-                quote! { <#ty as __rt::Subcommand>::SUBCOMMANDS },
-                quote! { <#ty as __rt::Subcommand>::SUBCOMMAND_DOCS },
-            )
-        } else {
-            (false, quote! { "" }, quote! { &[] })
+        let (subcmd_opt, subcmd_info) = match &self.0.subcommand {
+            Some(SubcommandInfo { effective_ty, optional, .. }) => (
+                quote! { #optional },
+                quote! { __rt::Some(<#effective_ty as __rt::Subcommand>::RAW_INFO) },
+            ),
+            None => (quote! { false }, quote! { __rt::None }),
         };
-        let subcmd_optional = if is_subcmd_optional { "1" } else { "0" };
 
-        let applet_doc = if let Some(m) = &self.0.cmd_meta {
-            let name = match &m.name {
-                Some(s) => quote! { #s },
-                None => quote! { env!("CARGO_PKG_NAME") },
-            };
-            let version = match &m.version {
-                Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => quote! { env!("CARGO_PKG_VERSION") },
-                None => quote! { "" },
-            };
-            // TODO: Compress this if it is the first line of `long_about`.
-            let about = match &m.about {
-                Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => quote! { env!("CARGO_PKG_DESCRIPTION") },
-                None => m.doc.summary().to_token_stream(),
-            };
-            let long_about = match &m.long_about {
-                Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) | None => m.doc.to_token_stream(),
-            };
-            let after_help = match &m.after_help {
-                Some(e) => quote! { #e },
-                None => quote! { "" },
-            };
-            let after_long_help = match &m.after_long_help {
-                Some(e) => quote! { #e },
-                None => quote! { "" },
-            };
-            quote! {
-                __rt::__const_concat!(
-                    #subcmd_optional,
-                    #name, "\0",
-                    #version, "\0",
-                    #about, "\0",
-                    #long_about, "\0",
-                    #after_help, "\0",
-                    #after_long_help,
-                )
-            }
-        } else {
-            quote! { "0" }
+        let cmd_doc = CommandDoc(self.0.cmd_meta);
+
+        tokens.extend(quote! {
+            __rt::RawArgsInfo::new(
+                #subcmd_opt,
+                #subcmd_info,
+                #cmd_doc,
+                #descs,
+                #helps,
+            )
+        });
+    }
+}
+
+/// String value for `RawArgsInfo::cmd_doc`.
+pub struct CommandDoc<'a>(pub Option<&'a CommandMeta>);
+
+impl ToTokens for CommandDoc<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Some(m) = self.0 else {
+            "".to_tokens(tokens);
+            return;
+        };
+
+        let long_about = match &m.long_about {
+            Some(Override::Explicit(e)) => quote! { #e },
+            Some(Override::Inherit) => quote! { env!("CARGO_PKG_DESCRIPTION") },
+            None => m.doc.to_token_stream(),
+        };
+
+        let after_long_help = match &m.after_long_help {
+            Some(e) => quote! { #e },
+            None => quote! { "" },
         };
 
         tokens.extend(quote! {
-            __rt::RawArgsInfo {
-                __subcommands: #subcmds,
-                __arg_descs: #arg_descs,
-
-                __subcommand_docs: __rt::__gate_help!(&[], #subcmd_docs),
-                __arg_helps: __rt::__gate_help!("", #arg_helps),
-                __applet_doc: __rt::__gate_help!("", #applet_doc),
-            }
+            __rt::__const_concat!(
+                #long_about,
+                "\0",
+                #after_long_help,
+            )
         });
     }
 }
