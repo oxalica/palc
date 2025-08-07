@@ -1,4 +1,7 @@
-use crate::{refl::RawArgsInfo, runtime::ParserChainNode};
+use crate::{
+    refl::{FMT_NAMED, FMT_UNNAMED, FMT_USAGE_NAMED, FMT_USAGE_UNNAMED, RawArgsInfo},
+    runtime::ParserChainNode,
+};
 
 #[inline(never)]
 fn push_str(out: &mut String, s: &str) {
@@ -54,28 +57,15 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         w!(" ", cmd);
     }
 
-    let mut has_named @ mut has_opt_named @ mut has_unnamed = false;
+    let fmt = info.fmt_help();
+
     // TODO: Global args.
-    for arg in info.named_args() {
-        has_named = true;
-        if arg.required() {
-            let mut desc = arg.description();
-            if matches!(desc.as_bytes(), [b'-', short, _, _, ..] if *short != b'-') {
-                // `-s, --long <VAL>` => `--long <VAL>`
-                desc = &desc[4..];
-            }
-            w!(" ", desc);
-        } else {
-            has_opt_named = true;
-        }
-    }
-    if has_opt_named {
+    fmt(out, FMT_USAGE_NAMED);
+    if info.has_optional_named() {
         w!(" [OPTIONS]");
     }
-    for arg in info.unnamed_args() {
-        has_unnamed = true;
-        w!(" ", arg.description());
-    }
+    fmt(out, FMT_USAGE_UNNAMED);
+
     let subcmds = info.subcommands();
     if subcmds.is_some() {
         w!(if info.subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" });
@@ -103,49 +93,27 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
     }
 
     // List of unnamed arguments.
-
-    if has_unnamed {
+    {
+        let last = out.len();
         w!("\nArguments:\n");
-        let mut first = true;
-        for arg in info.unnamed_args() {
-            if first {
-                first = false;
-            } else {
-                w!("\n");
-            }
-            w!("  ", arg.description());
-            if let Some(help) = arg.long_help() {
-                for (j, s) in help.split_terminator('\n').enumerate() {
-                    if j > 0 {
-                        w!("\n");
-                    }
-                    w!("          ", s, "\n");
-                }
-            }
+        let banner = out.len();
+        fmt(out, FMT_UNNAMED);
+        if out.len() == banner {
+            out.truncate(last);
         }
     }
 
     // List of named arguments.
-
-    if has_named {
+    {
+        let last = out.len();
         w!("\nOptions:\n");
-
-        for arg in info.named_args() {
-            let padding = if arg.description().starts_with("--") { "      " } else { "  " };
-            w!(padding, arg.description(), "\n");
-            if let Some(help) = arg.long_help() {
-                for (j, s) in help.split_terminator('\n').enumerate() {
-                    if j != 0 {
-                        w!("\n");
-                    }
-                    w!("          ", s, "\n");
-                }
-            }
-            w!("\n");
+        let banner = out.len();
+        fmt(out, FMT_NAMED);
+        if out.len() == banner {
+            out.truncate(last);
         }
     }
 
-    if !doc.after_long_help.is_empty() {
-        w!(doc.after_long_help);
-    }
+    // If this is non-empty, it should have a prepended newline to separate the previous paragraph.
+    w!(doc.after_long_help);
 }

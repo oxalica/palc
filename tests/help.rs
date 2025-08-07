@@ -17,11 +17,17 @@ struct ArgsCli {
 #[derive(Subcommand)]
 enum Commands {
     /// Run the app.
-    Run,
+    Run {
+        /// Passthru arguments.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
     /// Run some tests.
     Test {
         /// Filter patterns.
         filters: Vec<String>,
+        #[arg(long)]
+        feature: Vec<String>,
     },
     Config(ConfigCli),
 }
@@ -30,9 +36,14 @@ enum Commands {
 ///
 /// Some detailed explanation.
 #[derive(Args)]
+#[command(after_long_help = "this command provides absolutely no warranty!")]
 struct ConfigCli {
     #[arg(short, long, value_name = "VALUE")]
     key: String,
+
+    /// Enable debug.
+    #[arg(long)]
+    debug: bool,
 }
 
 #[track_caller]
@@ -42,7 +53,7 @@ fn assert_help<P: Parser>(args: &[&str], expect: Expect) {
 }
 
 #[test]
-fn args() {
+fn top_level() {
     assert_help::<ArgsCli>(
         &["me", "--help"],
         expect![[r#"
@@ -58,34 +69,57 @@ fn args() {
             Options:
               -v
                       Log more details.
+        "#]],
+    );
+}
 
-        "#]],
-    );
-    assert_help::<ArgsCli>(
-        &["me", "run", "--help"],
-        expect![[r#"
-            Usage: me run
-        "#]],
-    );
-    assert_help::<ArgsCli>(
-        &["me", "test", "--help"],
-        expect![[r#"
-            Usage: me test [FILTERS]...
-
-            Arguments:
-              [FILTERS]...          Filter patterns.
-        "#]],
-    );
+#[test]
+fn subcommand() {
     assert_help::<ArgsCli>(
         &["me", "config", "--help"],
         expect![[r#"
             Configure something.
             Some detailed explanation.
 
-            Usage: me config --key <VALUE>
+            Usage: me config --key <VALUE> [OPTIONS]
 
             Options:
               -k, --key <VALUE>
+
+                  --debug
+                      Enable debug.
+
+            this command provides absolutely no warranty!"#]],
+    );
+}
+
+#[test]
+fn last() {
+    assert_help::<ArgsCli>(
+        &["me", "run", "--help"],
+        expect![[r#"
+            Usage: me run -- [ARGS]...
+
+            Arguments:
+              [ARGS]...
+                      Passthru arguments.
+        "#]],
+    );
+}
+
+#[test]
+fn multiple() {
+    assert_help::<ArgsCli>(
+        &["me", "test", "--help"],
+        expect![[r#"
+            Usage: me test [OPTIONS] [FILTERS]...
+
+            Arguments:
+              [FILTERS]...
+                      Filter patterns.
+
+            Options:
+                  --feature <FEATURE>
 
         "#]],
     );

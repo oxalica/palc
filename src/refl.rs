@@ -7,6 +7,7 @@
 //! TODO(low): Decide whether to expose these API.
 #![cfg_attr(not(feature = "default"), allow(unused))]
 
+use std::fmt;
 #[cfg(not(feature = "help"))]
 use std::marker::PhantomData;
 
@@ -46,6 +47,19 @@ impl RawSubcommandInfo {
     }
 }
 
+/// - `w` will always be a `&mut String` but type-erased to avoid aggressive
+///   inlining (reserve, fail handling, inlined memcpy).
+/// - `what` indicates what to format, see constants below.
+type FmtWriter = fn(w: &mut dyn fmt::Write, what: u8);
+
+const fn fmt_noop(_w: &mut dyn fmt::Write, _what: u8) {}
+
+// This should be an enum but we use numbers to simplify proc-macro codegen.
+pub(crate) const FMT_UNNAMED: u8 = 0;
+pub(crate) const FMT_NAMED: u8 = 1;
+pub(crate) const FMT_USAGE_UNNAMED: u8 = 2;
+pub(crate) const FMT_USAGE_NAMED: u8 = 3;
+
 #[derive(Debug)]
 pub struct RawArgsInfo {
     /// Zero or more '\0'-terminated argument descriptions, either:
@@ -55,6 +69,10 @@ pub struct RawArgsInfo {
     /// Is the child subcommand optional or required? Only useful if there are subcommands.
     #[cfg(feature = "help")]
     subcmd_optional: bool,
+
+    /// If there is any optional named args, so that "[OPTIONS]" should be shown?
+    #[cfg(feature = "help")]
+    has_optional_named: bool,
 
     /// Child subcommands.
     #[cfg(feature = "help")]
@@ -68,21 +86,22 @@ pub struct RawArgsInfo {
     #[cfg(feature = "help")]
     cmd_doc: &'static str,
 
-    /// Zero or more '\0'-terminated argument help strings, in the same order of `descriptions`.
+    /// Help string formatter.
     #[cfg(feature = "help")]
-    helps: &'static str,
+    fmt_help: FmtWriter,
 }
 
 impl RawArgsInfo {
-    pub(crate) const EMPTY_REF: &'static Self = &Self::new(false, None, "", "", "");
+    pub(crate) const EMPTY_REF: &'static Self = &Self::new(false, false, None, "", "", fmt_noop);
 
     // Used by proc-macro.
     pub const fn new(
         subcmd_optional: bool,
+        has_optional_named: bool,
         subcmd_info: Option<&'static RawSubcommandInfo>,
         cmd_doc: &'static str,
         descriptions: &'static str,
-        helps: &'static str,
+        fmt_help: FmtWriter,
     ) -> Self {
         Self {
             descriptions,
@@ -90,11 +109,13 @@ impl RawArgsInfo {
             #[cfg(feature = "help")]
             subcmd_optional,
             #[cfg(feature = "help")]
+            has_optional_named,
+            #[cfg(feature = "help")]
             subcmd_info,
             #[cfg(feature = "help")]
             cmd_doc,
             #[cfg(feature = "help")]
-            helps,
+            fmt_help,
         }
     }
 
@@ -103,15 +124,27 @@ impl RawArgsInfo {
         self.descriptions
     }
 
-    // Used by proc-macro for concatenation.
-    pub const fn raw_helps(&self) -> &str {
+    // Used by proc-macro for composition.
+    pub const fn has_optional_named(&self) -> bool {
         #[cfg(feature = "help")]
         {
-            self.helps
+            self.has_optional_named
         }
         #[cfg(not(feature = "help"))]
         {
-            ""
+            false
+        }
+    }
+
+    // Used by proc-macro for composition.
+    pub const fn fmt_help(&self) -> FmtWriter {
+        #[cfg(feature = "help")]
+        {
+            self.fmt_help
+        }
+        #[cfg(not(feature = "help"))]
+        {
+            fmt_noop
         }
     }
 
@@ -138,24 +171,6 @@ impl RawArgsInfo {
         split_terminator(self.descriptions, b'\0').nth(idx.into())
     }
 
-    #[cfg(feature = "help")]
-    fn args(&self) -> impl Iterator<Item = ArgInfo> {
-        // See `RawArgsInfo`.
-        split_terminator(self.descriptions, b'\0')
-            .zip(split_terminator(self.helps, b'\0'))
-            .filter_map(|(desc, raw_help)| ArgInfo::from_raw(desc, raw_help))
-    }
-
-    #[cfg(feature = "help")]
-    pub(crate) fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
-        self.args().filter_map(ArgInfo::to_named)
-    }
-
-    #[cfg(feature = "help")]
-    pub(crate) fn unnamed_args(&self) -> impl Iterator<Item = UnnamedArgInfo> {
-        self.args().filter_map(ArgInfo::to_unnamed)
-    }
-
     /// Iterate over subcommands and short descriptions.
     #[cfg(feature = "help")]
     pub(crate) fn subcommands(
@@ -177,80 +192,6 @@ impl RawArgsInfo {
 pub(crate) struct CommandDoc {
     pub(crate) long_about: &'static str,
     pub(crate) after_long_help: &'static str,
-}
-
-/// Description of an arguments.
-#[derive(Debug, Clone, Copy)]
-enum ArgInfo {
-    Named(NamedArgInfo),
-    Unnamed(UnnamedArgInfo),
-}
-
-impl ArgInfo {
-    // See `RawArgsInfo`.
-    fn from_raw(description: &'static str, raw_help: &'static str) -> Option<Self> {
-        (|| {
-            // For hidden arguments, this returns `None`.
-            let (flags, long_help) = raw_help.split_at_checked(1)?;
-            let required = flags.as_bytes()[0] == b'1';
-            Some(if description.starts_with('-') {
-                Self::Named(NamedArgInfo { description, required, long_help })
-            } else {
-                Self::Unnamed(UnnamedArgInfo { description, long_help })
-            })
-        })()
-    }
-
-    fn to_named(self) -> Option<NamedArgInfo> {
-        if let Self::Named(v) = self { Some(v) } else { None }
-    }
-
-    fn to_unnamed(self) -> Option<UnnamedArgInfo> {
-        if let Self::Unnamed(v) = self { Some(v) } else { None }
-    }
-}
-
-/// Description of a named argument.
-#[derive(Debug, Clone, Copy)]
-pub struct NamedArgInfo {
-    required: bool,
-    description: &'static str,
-    long_help: &'static str,
-}
-
-impl NamedArgInfo {
-    pub fn description(&self) -> &'static str {
-        self.description
-    }
-
-    pub fn required(&self) -> bool {
-        self.required
-    }
-
-    pub fn long_help(&self) -> Option<&'static str> {
-        opt(self.long_help)
-    }
-}
-
-/// Description of an unnamed (positional) argument.
-#[derive(Debug, Clone, Copy)]
-pub struct UnnamedArgInfo {
-    description: &'static str,
-    long_help: &'static str,
-}
-
-impl UnnamedArgInfo {
-    pub fn description(&self) -> &'static str {
-        self.description
-    }
-
-    pub fn long_help(&self) -> Option<&'static str> {
-        opt(self.long_help)
-    }
-}
-
-fn opt(s: &str) -> Option<&str> {
-    if s.is_empty() { None } else { Some(s) }
 }
 
 #[inline(never)]

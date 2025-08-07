@@ -37,6 +37,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub mod __private {
     pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
+    pub use std::fmt::Write;
     pub use std::marker::PhantomData;
     pub use std::num::NonZero;
     pub use std::str::from_utf8;
@@ -46,7 +47,7 @@ pub mod __private {
 
     // Macros.
     pub use crate::{__const_concat, __gate_help, arg_value_info};
-    pub use std::{assert, concat, env, unimplemented, unreachable};
+    pub use std::{assert, concat, env, format_args, unimplemented, unreachable};
 
     // Used by `__arg_value_info!`
     pub use crate::values::{ArgValueInfo, InferValueParser, ValueEnum};

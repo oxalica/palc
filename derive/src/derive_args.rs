@@ -967,38 +967,74 @@ struct RawArgsInfo<'a>(&'a ParserStateDefImpl<'a>);
 impl ToTokens for RawArgsInfo<'_> {
     // See format in `RawArgInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let descs = self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
-
-        let mut helps = String::new();
-        for f in &self.0.fields {
-            if !f.hide {
-                helps.push(if f.attrs.required { '1' } else { '0' });
-                helps.push_str(&f.doc.0);
+        // Generate help string formatter.
+        let mut usage_named = FormatArgsBuilder::default();
+        let mut usage_unnamed = FormatArgsBuilder::default();
+        let mut help_named = FormatArgsBuilder::default();
+        let mut help_unnamed = FormatArgsBuilder::default();
+        for (idxs, help, usage) in [
+            (&self.0.named_fields, &mut help_named, &mut usage_named),
+            (&self.0.unnamed_fields, &mut help_unnamed, &mut usage_unnamed),
+        ] {
+            for &idx in idxs {
+                let f = &self.0.fields[idx];
+                if f.hide {
+                    continue;
+                }
+                if f.attrs.required {
+                    usage.maybe_push_usage_for(f);
+                }
+                help.maybe_push_help_for(f);
             }
-            helps.push('\0');
+        }
+        // [FOO]...
+        if let Some(c) = &self.0.catchall_field {
+            let f = &self.0.fields[c.field_idx];
+            if !f.hide {
+                usage_unnamed.maybe_push_usage_for(f);
+                help_unnamed.maybe_push_help_for(f);
+            }
+        }
+        // -- [LAST]
+        if let Some(idx) = self.0.last_field {
+            let f = &self.0.fields[idx];
+            if !f.hide {
+                usage_unnamed.template.push_str(" --");
+                usage_unnamed.maybe_push_usage_for(f);
+                help_unnamed.maybe_push_help_for(f);
+            }
         }
 
-        let (descs, helps) = if self.0.flatten_fields.is_empty() {
-            (quote!(#descs), quote!(#helps))
+        let flatten_tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
+        let flatten_tys2 = flatten_tys.clone();
+        let fmt_fn = quote! {
+            |__w, __what| {
+                // WAIT: Rust 1.89 in order to join `format_args` results and `write_fmt` once.
+                let _ = match __what {
+                    0u8 => __rt::Write::write_fmt(__w, #help_unnamed),
+                    1u8 => __rt::Write::write_fmt(__w, #help_named),
+                    2u8 => __rt::Write::write_fmt(__w, #usage_unnamed),
+                    _ => __rt::Write::write_fmt(__w, #usage_named),
+                };
+                #(<<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.fmt_help()(__w, __what);)*
+            }
+        };
+
+        // Compose arg descriptions.
+
+        let descs = self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
+        let descs = if self.0.flatten_fields.is_empty() {
+            quote!(#descs)
         } else {
-            let tys1 = self.0.flatten_fields.iter().map(|f| f.effective_ty);
-            let tys2 = tys1.clone();
+            let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
             // FIXME: This duplicates strings quadratically, especially when a large
             // `impl Args` is flattened in many places like in the `deno-palc` example.
-            (
-                quote! {
-                    __rt::__const_concat!(
-                        #descs,
-                        #(<<#tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_descriptions(),)*
-                    )
-                },
-                quote! {
-                    __rt::__const_concat!(
-                        #helps,
-                        #(<<#tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_helps(),)*
-                    )
-                },
-            )
+            quote! {
+                __rt::__const_concat!(
+                    #descs,
+                    #(<<#tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_descriptions(),)*
+                )
+            }
         };
 
         let (subcmd_opt, subcmd_info) = match &self.0.subcommand {
@@ -1009,16 +1045,79 @@ impl ToTokens for RawArgsInfo<'_> {
             None => (quote! { false }, quote! { __rt::None }),
         };
 
+        let has_optional_named = if self.0.named_fields.iter().any(|&idx| {
+            let f = &self.0.fields[idx];
+            !f.attrs.required && !f.hide
+        }) {
+            quote! { true }
+        } else {
+            quote! {
+                false
+                #(|| <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.has_optional_named())*
+            }
+        };
+
         let cmd_doc = CommandDoc(self.0.cmd_meta);
 
         tokens.extend(quote! {
             &__rt::RawArgsInfo::new(
                 #subcmd_opt,
+                #has_optional_named,
                 #subcmd_info,
                 #cmd_doc,
                 #descs,
-                #helps,
+                #fmt_fn,
             )
+        });
+    }
+}
+
+#[derive(Default)]
+struct FormatArgsBuilder {
+    template: String,
+    args: TokenStream,
+}
+
+impl FormatArgsBuilder {
+    fn push_arg(&mut self, tts: impl ToTokens) {
+        self.template.push_str("{}");
+        self.args.extend(quote! { , });
+        tts.to_tokens(&mut self.args);
+    }
+
+    fn maybe_push_help_for(&mut self, f: &FieldInfo<'_>) {
+        self.template.push_str("  ");
+        if f.description.starts_with("--") {
+            // Pad "--key" to align with "-k, --key".
+            self.template.push_str("    ");
+        }
+        self.push_arg(&f.description);
+        if f.doc.0.is_empty() {
+            self.template.push_str("\n\n");
+        } else {
+            self.template.push_str("\n          ");
+            self.push_arg(&f.doc);
+            self.template.push('\n');
+        }
+    }
+
+    fn maybe_push_usage_for(&mut self, f: &FieldInfo<'_>) {
+        self.template.push(' ');
+        // For "-k, --key <VALUE>", show its usage as "--key <VALUE>".
+        let desc = if matches!(f.description.as_bytes(), [b'-', b, b',',  ..] if *b != b'-') {
+            &f.description[4..]
+        } else {
+            &f.description
+        };
+        self.push_arg(desc);
+    }
+}
+
+impl ToTokens for FormatArgsBuilder {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Self { template, args } = self;
+        tokens.extend(quote! {
+            __rt::format_args!(#template #args)
         });
     }
 }
@@ -1040,7 +1139,9 @@ impl ToTokens for CommandDoc<'_> {
         };
 
         let after_long_help = match &m.after_long_help {
-            Some(e) => quote! { #e },
+            // Prepend a newline if it is provided, to have a empty line between
+            // generated argument helps and the custom paragraph.
+            Some(e) => quote! { "\n", #e },
             None => quote! { "" },
         };
 
