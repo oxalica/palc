@@ -665,7 +665,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
             impl __rt::ParserState for #state_name {
                 type Output = #output_ty;
 
-                const RAW_ARGS_INFO: __rt::RawArgsInfo = #raw_args_info;
+                const RAW_ARGS_INFO: &'static __rt::RawArgsInfo = #raw_args_info;
                 const HAS_SUBCOMMAND: __rt::bool = #has_subcommand;
 
                 const TOTAL_ARG_CNT: __rt::u8 = #self_arg_cnt
@@ -1012,7 +1012,7 @@ impl ToTokens for RawArgsInfo<'_> {
         let cmd_doc = CommandDoc(self.0.cmd_meta);
 
         tokens.extend(quote! {
-            __rt::RawArgsInfo::new(
+            &__rt::RawArgsInfo::new(
                 #subcmd_opt,
                 #subcmd_info,
                 #cmd_doc,

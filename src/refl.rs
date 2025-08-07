@@ -7,43 +7,42 @@
 //! TODO(low): Decide whether to expose these API.
 #![cfg_attr(not(feature = "default"), allow(unused))]
 
+#[cfg(not(feature = "help"))]
+use std::marker::PhantomData;
+
 /// Runtime information of a enum of subcommands.
-#[cfg(feature = "help")]
 #[derive(Debug)]
 pub struct RawSubcommandInfo<A: ?Sized = [&'static str]> {
     /// Zero or more NUL-terminated subcommand names.
+    #[cfg(feature = "help")]
     subcommands: &'static str,
 
     /// `RawArgsInfo::cmd_doc` of each subcommand.
+    #[cfg(feature = "help")]
     cmd_docs: A,
+
+    #[cfg(not(feature = "help"))]
+    _marker: PhantomData<A>,
 }
 
-#[cfg(feature = "help")]
-impl RawSubcommandInfo<[&'static str; 0]> {
-    pub(crate) const fn empty() -> Self {
-        Self::new("", [])
-    }
-}
-
-#[cfg(feature = "help")]
-impl<const N: usize> RawSubcommandInfo<[&'static str; N]> {
-    // Used by proc-macro.
-    pub const fn new(subcommands: &'static str, cmd_docs: [&'static str; N]) -> Self {
-        Self { subcommands, cmd_docs }
-    }
-}
-
-#[cfg(not(feature = "help"))]
-pub struct RawSubcommandInfo(());
-
-#[cfg(not(feature = "help"))]
 impl RawSubcommandInfo {
-    pub(crate) const fn empty() -> Self {
-        Self(())
+    pub(crate) const EMPTY_REF: &Self = &Self::new("", []);
+
+    // Used by proc-macro.
+    #[cfg(feature = "help")]
+    pub const fn new<const N: usize>(
+        subcommands: &'static str,
+        cmd_docs: [&'static str; N],
+    ) -> RawSubcommandInfo<[&'static str; N]> {
+        RawSubcommandInfo { subcommands, cmd_docs }
     }
 
-    pub const fn new<const N: usize>(_: &'static str, _: [&'static str; N]) -> Self {
-        Self(())
+    #[cfg(not(feature = "help"))]
+    pub const fn new<const N: usize>(
+        _subcommands: &'static str,
+        _cmd_docs: [&'static str; N],
+    ) -> Self {
+        Self { _marker: PhantomData }
     }
 }
 
@@ -75,9 +74,7 @@ pub struct RawArgsInfo {
 }
 
 impl RawArgsInfo {
-    pub(crate) const fn empty() -> Self {
-        Self::new(false, None, "", "", "")
-    }
+    pub(crate) const EMPTY_REF: &'static Self = &Self::new(false, None, "", "", "");
 
     // Used by proc-macro.
     pub const fn new(

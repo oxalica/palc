@@ -115,7 +115,7 @@ pub struct FallbackState<T>(Infallible, PhantomData<T>);
 impl<T: 'static> ParserState for FallbackState<T> {
     type Output = T;
 
-    const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
+    const RAW_ARGS_INFO: &'static RawArgsInfo = RawArgsInfo::EMPTY_REF;
 
     const TOTAL_ARG_CNT: u8 = 0;
     const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
@@ -393,7 +393,7 @@ pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Er
 pub trait ParserState: ParserStateDyn {
     type Output;
 
-    const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
+    const RAW_ARGS_INFO: &'static RawArgsInfo = RawArgsInfo::EMPTY_REF;
     /// For proc-macro to reject flattening an `impl Args` with subcommands.
     const HAS_SUBCOMMAND: bool = false;
 
@@ -445,7 +445,7 @@ pub trait ParserStateDyn: 'static {
 
     /// Runtime reflection.
     fn info(&self) -> &'static RawArgsInfo {
-        &const { RawArgsInfo::empty() }
+        RawArgsInfo::EMPTY_REF
     }
 }
 
@@ -478,7 +478,7 @@ impl Args for () {
 )]
 #[doc(hidden)]
 pub trait Subcommand: Sized + 'static {
-    const RAW_INFO: &'static RawSubcommandInfo = &RawSubcommandInfo::empty();
+    const RAW_INFO: &'static RawSubcommandInfo = RawSubcommandInfo::EMPTY_REF;
 
     fn feed_subcommand(_name: &OsStr) -> FeedSubcommand<Self> {
         None
