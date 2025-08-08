@@ -134,6 +134,10 @@ pub fn parse_default_str<T, A: ArgValueInfo<T>>(s: &str, _: A) -> Result<T> {
     A::parse(s.as_ref())
 }
 
+pub fn assert_impl_display_for_help<T: std::fmt::Display>(x: T) -> T {
+    x
+}
+
 pub fn parse_take_arg<T, A: ArgValueInfo<T>>(s: &mut OsString, _: A) -> Result<T> {
     A::parse(s)
 }

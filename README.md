@@ -109,12 +109,17 @@ Though some of clap features are not-yet-implemented.
         that is -- only one innermost Args on the ancestor chain will receive it, not all.
 
 - [x] Help generation.
+  Note: Help text is only for human consumption. The precise format is unstable,
+  may change at any time and is not expected to exactly follow `clap`'s help format
+  (although that is our general direction).
+
   - [x] Long help `--help`.
   - [ ] Short help `-h`.
   - [ ] Version `--version`.
   - [x] Custom header and footer.
   - [ ] Hiding.
   - [ ] Possible values of enums.
+  - [x] Default values via `arg(default_value{,_t})`.
   - [ ] Custom help subcommand or flags.
 
 - [ ] Helpful error messages.

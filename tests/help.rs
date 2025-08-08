@@ -137,3 +137,47 @@ fn multiple() {
         "#]],
     );
 }
+
+#[test]
+fn default_value() {
+    #[derive(Parser)]
+    struct Cli {
+        #[arg(long, default_value = "invalid")]
+        default_str: i32,
+        #[arg(long, default_value_t)]
+        default_trait: i32,
+        /// Preferred!
+        #[arg(long, default_value_t = 42)]
+        default_expr: i32,
+        #[arg(long, default_value_t = "foo".into())]
+        infer: String,
+        #[arg(default_value = "static")]
+        unnamed: Option<String>,
+    }
+
+    assert_help::<Cli>(
+        &["me", "--help"],
+        expect![[r#"
+            Usage: me [OPTIONS]
+
+            Arguments:
+              [UNNAMED]
+                      [default: static]
+
+            Options:
+                  --default-str <DEFAULT_STR>
+                      [default: invalid]
+
+                  --default-trait <DEFAULT_TRAIT>
+                      [default: 0]
+
+                  --default-expr <DEFAULT_EXPR>
+                      Preferred!
+                      [default: 42]
+
+                  --infer <INFER>
+                      [default: foo]
+
+        "#]],
+    );
+}

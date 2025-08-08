@@ -97,7 +97,7 @@ struct FieldInfo<'i> {
     attrs: ArgAttrs,
 
     // Validations //
-    default_expr: Option<TokenStream>,
+    default_value: Option<DefaultValue>,
     exclusive: bool,
     dependencies: Vec<FieldPath>,
     conflicts: Vec<FieldPath>,
@@ -107,6 +107,11 @@ struct FieldInfo<'i> {
     description: String,
     doc: Doc,
     hide: bool,
+}
+
+enum DefaultValue {
+    ParseStr(LitStr),
+    ValueExpr(TokenStream),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,34 +293,32 @@ pub fn expand_state_def_impl<'i>(
         };
 
         // Default values.
-        let default_expr = match (arg.default_value_t.take(), arg.default_value.take()) {
-            (Some(Override::Inherit), None) => Some(quote_spanned! {field.ty.span()=>
-                __rt::Default::default()
-            }),
-            (Some(Override::Explicit(e)), None) => Some(e.into_token_stream()),
-            (None, Some(default_str)) => {
-                let value_info = value_info(effective_ty);
-                Some(quote_spanned! {field.ty.span()=>
-                    __rt::parse_default_str(#default_str, #value_info)?
-                })
+        let default_value = match (arg.default_value_t.take(), arg.default_value.take()) {
+            (Some(Override::Inherit), None) => {
+                Some(DefaultValue::ValueExpr(quote_spanned! {effective_ty.span()=>
+                    <#effective_ty as __rt::Default>::default()
+                }))
             }
+            (Some(Override::Explicit(e)), None) => {
+                Some(DefaultValue::ValueExpr(e.into_token_stream()))
+            }
+            (None, Some(default_str)) => Some(DefaultValue::ParseStr(default_str)),
             (None, None) => None,
             (Some(_), Some(tt)) => {
                 emit_error!(tt, "arg(default_value) conflicts with arg(default_value_t)");
                 None
             }
         };
-        let (required, default_expr) = match default_expr {
-            Some(e) => {
-                if arg.required {
-                    emit_error!(
-                        ident,
-                        "`arg(required)` conflicts with `arg(default_value, default_value_t)`"
-                    );
-                }
-                (false, Some(e))
+        let required = if default_value.is_none() {
+            arg.required || finish == FieldFinish::UnwrapChecked
+        } else {
+            if arg.required {
+                emit_error!(
+                    ident,
+                    "`arg(required)` conflicts with `arg(default_value, default_value_t)`"
+                );
             }
-            None => (arg.required || finish == FieldFinish::UnwrapChecked, None),
+            false
         };
 
         let value_delimiter = if let Some(ch) = &arg.value_delimiter {
@@ -454,7 +457,7 @@ pub fn expand_state_def_impl<'i>(
                 finish,
                 enc_names,
                 attrs,
-                default_expr,
+                default_value,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
@@ -503,7 +506,7 @@ pub fn expand_state_def_impl<'i>(
                 finish,
                 enc_names: Vec::new(),
                 attrs,
-                default_expr,
+                default_value,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
@@ -898,7 +901,7 @@ impl ToTokens for ValidationImpl<'_> {
 
         for (f, idx) in def.fields.iter().zip(0u8..) {
             let ident = f.ident;
-            if f.attrs.required && f.default_expr.is_none() {
+            if f.attrs.required && f.default_value.is_none() {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
                         return __rt::missing_required_arg::<Self, _>(#idx)
@@ -949,8 +952,17 @@ impl ToTokens for ValidationImpl<'_> {
         }
 
         // Set default values after checks.
-        for FieldInfo { ident, default_expr, .. } in &def.fields {
-            if let Some(e) = default_expr {
+        for FieldInfo { ident, default_value, effective_ty, .. } in &def.fields {
+            if let Some(default) = default_value {
+                let e = match default {
+                    DefaultValue::ValueExpr(e) => e,
+                    DefaultValue::ParseStr(s) => {
+                        let value_info = value_info(effective_ty);
+                        &quote_spanned! {effective_ty.span()=>
+                            __rt::parse_default_str(#s, #value_info)?
+                        }
+                    }
+                };
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
                         self.#ident = __rt::Some(#e);
@@ -1098,6 +1110,19 @@ impl FormatArgsBuilder {
             self.template.push_str("          ");
             self.push_arg(&f.doc);
             self.template.push('\n');
+        }
+
+        if let Some(default) = &f.default_value {
+            self.template.push_str("          [default: ");
+            let arg: &dyn ToTokens = match default {
+                DefaultValue::ParseStr(s) => s,
+                DefaultValue::ValueExpr(e) => {
+                    let effective_ty = f.effective_ty;
+                    &quote_spanned! {e.span()=> __rt::assert_impl_display_for_help::<#effective_ty>(#e) }
+                }
+            };
+            self.push_arg(arg);
+            self.template.push_str("]\n");
         }
 
         self.template.push('\n');
