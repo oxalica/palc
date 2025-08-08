@@ -1,11 +1,11 @@
 //! See `./criterion-clap.rs`.
+#![expect(dead_code, reason = "fields are only for testing")]
 use std::str::FromStr;
 
 use argh::FromArgs;
 
 /// Criterion Benchmark
 #[derive(FromArgs)]
-#[expect(dead_code, reason = "fields are only for testing")]
 struct Cli {
     /// skip benchmarks whose names do not contain FILTER.
     #[argh(positional)]

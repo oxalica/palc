@@ -4,10 +4,12 @@ members = [".", "derive", "compile-bench"]
 
 [workspace.package]
 repository = "https://github.com/oxalica/palc"
-edition = "2024"
 license = "MIT OR Apache-2.0"
 categories = ["command-line-interface"]
 keywords = ["argument", "cli", "arg", "argument", "clap"]
+edition = "2024"
+# NB. Sync with CI.
+rust-version = "1.85" # edition 2024
 
 [package]
 name = "palc"
@@ -15,6 +17,7 @@ version = "0.0.1"
 description = "WIP: Command Line Argument Parser with several opposite design goal from Clap"
 exclude = ["*.sh"] # Shortcut scripts.
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 categories.workspace = true

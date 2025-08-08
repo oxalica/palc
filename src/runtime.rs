@@ -278,7 +278,7 @@ pub(crate) struct ParserChainNode<'a, 'b, 'c> {
 
 pub trait ParserChain {
     #[expect(private_interfaces, reason = "not used by proc-macro")]
-    fn out(&mut self) -> Option<ParserChainNode> {
+    fn out(&mut self) -> Option<ParserChainNode<'_, '_, '_>> {
         None
     }
 }
@@ -301,7 +301,7 @@ impl ParserChain for () {}
 
 // TODO: De-virtualize this.
 impl ParserChain for ParserChainNode<'_, '_, '_> {
-    fn out(&mut self) -> Option<ParserChainNode> {
+    fn out(&mut self) -> Option<ParserChainNode<'_, '_, '_>> {
         // Reborrow fields.
         let ParserChainNode { cmd_name, state, ancestors } = self;
         Some(ParserChainNode { cmd_name, state: &mut **state, ancestors: &mut **ancestors })
@@ -442,7 +442,7 @@ pub trait ParserStateDyn: 'static {
     ///
     /// `idx` is the index of logical arguments, counting each multi-value-argument as one.
     /// `is_last` indices if a `--` has been encountered. It does not effect `idx`.
-    fn feed_unnamed(&mut self, arg: &mut OsString, idx: usize, is_last: bool) -> FeedUnnamed {
+    fn feed_unnamed(&mut self, arg: &mut OsString, idx: usize, is_last: bool) -> FeedUnnamed<'_> {
         let _ = (arg, idx, is_last);
         Err(None)
     }
@@ -684,7 +684,7 @@ impl<'a> ArgsIter<'a> {
             Ok(Some(Arg::EncodedNamed(enc_name, has_eq, value)))
         } else if buf.starts_with("-") && buf.len() != 1 {
             self.next_short_idx = Some(NonZero::new(1).unwrap());
-            return self.next_arg(buf);
+            self.next_arg(buf)
         } else {
             Ok(Some(Arg::Unnamed(std::mem::take(buf))))
         }
