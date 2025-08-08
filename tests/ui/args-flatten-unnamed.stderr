@@ -1,5 +1,5 @@
-error[E0080]: evaluation of constant value failed
+error[E0080]: evaluation panicked: TODO: cannot arg(flatten) positional arguments yet
  --> tests/ui/args-flatten-unnamed.rs:6:12
   |
 6 |     inner: Inner,
-  |            ^^^^^ evaluation panicked: TODO: cannot arg(flatten) positional arguments yet
+  |            ^^^^^ evaluation of `_` failed here

@@ -1,5 +1,5 @@
-error[E0080]: evaluation of constant value failed
+error[E0080]: evaluation panicked: `arg(ignore_case)` only supports `ValueEnum` that contains no UPPERCASE variants
  --> tests/ui/args-invalid-ignore_case.rs:8:12
   |
 8 |     upper: UpperCase,
-  |            ^^^^^^^^^ evaluation panicked: `arg(ignore_case)` only supports `ValueEnum` that contains no UPPERCASE variants
+  |            ^^^^^^^^^ evaluation of `_` failed here
