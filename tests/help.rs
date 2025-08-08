@@ -98,6 +98,8 @@ fn last() {
     assert_help::<ArgsCli>(
         &["me", "run", "--help"],
         expect![[r#"
+            Run the app.
+
             Usage: me run -- [ARGS]...
 
             Arguments:
@@ -112,6 +114,8 @@ fn multiple() {
     assert_help::<ArgsCli>(
         &["me", "test", "--help"],
         expect![[r#"
+            Run some tests.
+
             Usage: me test [OPTIONS] [FILTERS]...
 
             Arguments:

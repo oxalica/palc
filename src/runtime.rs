@@ -401,6 +401,10 @@ pub trait ParserState: ParserStateDyn {
     const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
 
     fn init() -> Self;
+
+    // Semantically this takes the ownership of `self`, but using `&mut self`
+    // can eliminate partial drop codegen and call the default drop impl.
+    // It gives a much better codegen.
     fn finish(&mut self) -> Result<Self::Output>;
 }
 
@@ -447,26 +451,6 @@ pub trait ParserStateDyn: 'static {
     fn info(&self) -> &'static RawArgsInfo {
         RawArgsInfo::EMPTY_REF
     }
-}
-
-/// No-op state for unit structs or unit variants.
-///
-/// We still need to fully consume the input for global arguments and error reporting.
-impl ParserState for () {
-    type Output = ();
-
-    fn init() -> Self {}
-
-    // Semantically this takes the ownership of `self`, but using `&mut self`
-    // can eliminate partial drop codegen and call the default drop impl.
-    // It gives a much better codegen.
-    fn finish(&mut self) -> Result<Self::Output> {
-        Ok(())
-    }
-}
-impl ParserStateDyn for () {}
-impl Args for () {
-    type __State = ();
 }
 
 /// Trait of subcommand enums.
