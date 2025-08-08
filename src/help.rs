@@ -70,12 +70,13 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
     if subcmds.is_some() {
         w!(if info.subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" });
     }
-    w!("\n");
+    // EOL and empty line separator.
+    w!("\n\n");
 
     // List of commands.
 
     if let Some(subcmds) = subcmds {
-        w!("\nCommands:\n");
+        w!("Commands:\n");
         let pad = "                        ";
         let max_len = subcmds.clone().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
 
@@ -90,30 +91,34 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
             }
             w!("\n");
         }
+
+        // Empty line separator.
+        w!("\n");
     }
 
     // List of unnamed arguments.
     {
         let last = out.len();
-        w!("\nArguments:\n");
+        w!("Arguments:\n");
         let banner = out.len();
         fmt(out, FMT_UNNAMED);
         if out.len() == banner {
             out.truncate(last);
         }
+        // Empty line separator should already be emitted.
     }
 
     // List of named arguments.
     {
         let last = out.len();
-        w!("\nOptions:\n");
+        w!("Options:\n");
         let banner = out.len();
         fmt(out, FMT_NAMED);
         if out.len() == banner {
             out.truncate(last);
         }
+        // Empty line separator should already be emitted.
     }
 
-    // If this is non-empty, it should have a prepended newline to separate the previous paragraph.
     w!(doc.after_long_help);
 }

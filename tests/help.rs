@@ -44,6 +44,10 @@ struct ConfigCli {
     /// Enable debug.
     #[arg(long)]
     debug: bool,
+
+    /// Force to do it.
+    #[arg(short)]
+    force: bool,
 }
 
 #[track_caller]
@@ -69,6 +73,7 @@ fn top_level() {
             Options:
               -v
                       Log more details.
+
         "#]],
     );
 }
@@ -89,6 +94,9 @@ fn subcommand() {
                   --debug
                       Enable debug.
 
+              -f
+                      Force to do it.
+
             this command provides absolutely no warranty!"#]],
     );
 }
@@ -105,6 +113,7 @@ fn last() {
             Arguments:
               [ARGS]...
                       Passthru arguments.
+
         "#]],
     );
 }

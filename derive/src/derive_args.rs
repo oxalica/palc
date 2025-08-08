@@ -1088,17 +1088,19 @@ impl FormatArgsBuilder {
     fn maybe_push_help_for(&mut self, f: &FieldInfo<'_>) {
         self.template.push_str("  ");
         if f.description.starts_with("--") {
-            // Pad "--key" to align with "-k, --key".
+            // Pad 4 spaces before "--key" to align with "-k, --key".
             self.template.push_str("    ");
         }
         self.push_arg(&f.description);
-        if f.doc.0.is_empty() {
-            self.template.push_str("\n\n");
-        } else {
-            self.template.push_str("\n          ");
+        self.template.push('\n');
+
+        if !f.doc.0.is_empty() {
+            self.template.push_str("          ");
             self.push_arg(&f.doc);
             self.template.push('\n');
         }
+
+        self.template.push('\n');
     }
 
     fn maybe_push_usage_for(&mut self, f: &FieldInfo<'_>) {
@@ -1132,17 +1134,15 @@ impl ToTokens for CommandDoc<'_> {
             return;
         };
 
-        let long_about = match &m.long_about {
-            Some(Override::Explicit(e)) => quote! { #e },
-            Some(Override::Inherit) => quote! { env!("CARGO_PKG_DESCRIPTION") },
-            None => m.doc.to_token_stream(),
+        let long_about: &dyn ToTokens = match &m.long_about {
+            Some(Override::Explicit(e)) => e,
+            Some(Override::Inherit) => &quote! { env!("CARGO_PKG_DESCRIPTION") },
+            None => &m.doc,
         };
 
-        let after_long_help = match &m.after_long_help {
-            // Prepend a newline if it is provided, to have a empty line between
-            // generated argument helps and the custom paragraph.
-            Some(e) => quote! { "\n", #e },
-            None => quote! { "" },
+        let after_long_help: &dyn ToTokens = match &m.after_long_help {
+            Some(e) => e,
+            None => &"",
         };
 
         tokens.extend(quote! {
