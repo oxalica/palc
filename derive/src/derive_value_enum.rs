@@ -14,10 +14,19 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     }) {
         Ok(tts) => wrap_anon_item(tts),
         Err(mut tts) => {
-            tts.extend(wrap_anon_item(ValueEnumImpl {
-                ident: &input.ident,
-                generics: &input.generics,
-                variants: Vec::new(),
+            let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+            let name = &input.ident;
+
+            tts.extend(wrap_anon_item(quote! {
+                #[automatically_derived]
+                impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {}
+
+                #[automatically_derived]
+                impl #impl_generics __rt::fmt::Display for #name #ty_generics #where_clause {
+                    fn fmt(&self, _: &mut __rt::fmt::Formatter<'_>) -> __rt::fmt::Result {
+                        __rt::unimplemented!()
+                    }
+                }
             }));
             tts
         }
@@ -80,6 +89,9 @@ impl ToTokens for ValueEnumImpl<'_> {
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
         let variant_strs = self.variants.iter().map(|v| &v.parse_name);
         let variant_idents = self.variants.iter().map(|v| v.ident);
+        let variant_strs2 = variant_strs.clone();
+        let variant_idents2 = variant_idents.clone();
+
         let possible_inputs_nul =
             self.variants.iter().flat_map(|v| [&v.parse_name, "\0"]).collect::<String>();
 
@@ -98,6 +110,17 @@ impl ToTokens for ValueEnumImpl<'_> {
                     __rt::Some(match __v {
                         #(#variant_strs => Self:: #variant_idents,)*
                         _ => return __rt::None
+                    })
+                }
+            }
+
+            #[automatically_derived]
+            impl #impl_generics __rt::fmt::Display for #name #ty_generics #where_clause {
+                // If there is no variant.
+                #[allow(unreachable_code)]
+                fn fmt(&self, __f: &mut __rt::fmt::Formatter<'_>) -> __rt::fmt::Result {
+                    __f.write_str(match *self {
+                        #(Self:: #variant_idents2 => #variant_strs2,)*
                     })
                 }
             }

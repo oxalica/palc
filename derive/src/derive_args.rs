@@ -1011,10 +1011,10 @@ impl ToTokens for RawArgsInfo<'_> {
             |__w, __what| {
                 // WAIT: Rust 1.89 in order to join `format_args` results and `write_fmt` once.
                 let _ = match __what {
-                    0u8 => __rt::Write::write_fmt(__w, #help_unnamed),
-                    1u8 => __rt::Write::write_fmt(__w, #help_named),
-                    2u8 => __rt::Write::write_fmt(__w, #usage_unnamed),
-                    _ => __rt::Write::write_fmt(__w, #usage_named),
+                    0u8 => __rt::fmt::Write::write_fmt(__w, #help_unnamed),
+                    1u8 => __rt::fmt::Write::write_fmt(__w, #help_named),
+                    2u8 => __rt::fmt::Write::write_fmt(__w, #usage_unnamed),
+                    _ => __rt::fmt::Write::write_fmt(__w, #usage_named),
                 };
                 #(<<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.fmt_help()(__w, __what);)*
             }

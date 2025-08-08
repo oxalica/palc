@@ -26,15 +26,17 @@ pub trait ArgValueInfo<T>: 'static + Sized + sealed::Sealed {
 
 /// This trait definition is not a public API, only the derive-macro is.
 #[doc(hidden)]
-pub trait ValueEnum: Sized {
+pub trait ValueEnum: std::fmt::Display + Sized {
     /// See [`ArgValueInfo::POSSIBLE_INPUTS_NUL`].
-    const POSSIBLE_INPUTS_NUL: &'static str;
+    const POSSIBLE_INPUTS_NUL: &'static str = "";
 
     /// Whether there is no ASCII upper case letter in any variants.
     /// This is required for `arg(ignore_case)`.
-    const NO_UPPER_CASE: bool;
+    const NO_UPPER_CASE: bool = true;
 
-    fn parse_value(s: &str) -> Option<Self>;
+    fn parse_value(_s: &str) -> Option<Self> {
+        None
+    }
 }
 
 #[macro_export]

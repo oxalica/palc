@@ -37,7 +37,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub mod __private {
     pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
-    pub use std::fmt::Write;
+    pub use std::fmt;
     pub use std::marker::PhantomData;
     pub use std::num::NonZero;
     pub use std::str::from_utf8;
