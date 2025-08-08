@@ -63,7 +63,7 @@ pub(crate) const FMT_USAGE_NAMED: u8 = 3;
 #[derive(Debug)]
 pub struct RawArgsInfo {
     /// Zero or more '\0'-terminated argument descriptions, either:
-    /// "-s", "--long", "-s, --long=<VALUE>", "<REQUIRED>", or "[OPTIONAL]".
+    /// `-s`, `--long`, `-s, --long=<VALUE>`, `<REQUIRED>`, or `[OPTIONAL]`.
     descriptions: &'static str,
 
     /// Is the child subcommand optional or required? Only useful if there are subcommands.
