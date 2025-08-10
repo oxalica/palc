@@ -1017,8 +1017,6 @@ impl ToTokens for RawArgsInfo<'_> {
             }
         }
 
-        let flatten_tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
-        let flatten_tys2 = flatten_tys.clone();
         let fmt_fn = quote! {
             |__w, __what| {
                 // WAIT: Rust 1.89 in order to join `format_args` results and `write_fmt` once.
@@ -1028,26 +1026,10 @@ impl ToTokens for RawArgsInfo<'_> {
                     2u8 => __rt::fmt::Write::write_fmt(__w, #usage_unnamed),
                     _ => __rt::fmt::Write::write_fmt(__w, #usage_named),
                 };
-                #(<<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.fmt_help()(__w, __what);)*
             }
         };
-
-        // Compose arg descriptions.
 
         let descs = self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
-        let descs = if self.0.flatten_fields.is_empty() {
-            quote!(#descs)
-        } else {
-            let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
-            // FIXME: This duplicates strings quadratically, especially when a large
-            // `impl Args` is flattened in many places like in the `deno-palc` example.
-            quote! {
-                __rt::__const_concat!(
-                    #descs,
-                    #(<<#tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.raw_descriptions(),)*
-                )
-            }
-        };
 
         let (subcmd_opt, subcmd_info) = match &self.0.subcommand {
             Some(SubcommandInfo { effective_ty, optional, .. }) => (
@@ -1057,19 +1039,13 @@ impl ToTokens for RawArgsInfo<'_> {
             None => (quote! { false }, quote! { __rt::None }),
         };
 
-        let has_optional_named = if self.0.named_fields.iter().any(|&idx| {
+        let has_optional_named = self.0.named_fields.iter().any(|&idx| {
             let f = &self.0.fields[idx];
             !f.attrs.required && !f.hide
-        }) {
-            quote! { true }
-        } else {
-            quote! {
-                false
-                #(|| <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.has_optional_named())*
-            }
-        };
+        });
 
         let cmd_doc = CommandDoc(self.0.cmd_meta);
+        let flatten_tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
 
         tokens.extend(quote! {
             &__rt::RawArgsInfo::new(
@@ -1079,6 +1055,11 @@ impl ToTokens for RawArgsInfo<'_> {
                 #cmd_doc,
                 #descs,
                 #fmt_fn,
+                [
+                    #(__rt::RawArgsInfoRef(
+                        <<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO
+                    )),*
+                ],
             )
         });
     }

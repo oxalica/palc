@@ -57,7 +57,7 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         w!(" ", cmd);
     }
 
-    let fmt = info.fmt_help();
+    let fmt = |out: &mut String, what: u8| info.fmt_help(out, what);
 
     // TODO: Global args.
     fmt(out, FMT_USAGE_NAMED);

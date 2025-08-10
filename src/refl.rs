@@ -60,8 +60,12 @@ pub(crate) const FMT_NAMED: u8 = 1;
 pub(crate) const FMT_USAGE_UNNAMED: u8 = 2;
 pub(crate) const FMT_USAGE_NAMED: u8 = 3;
 
+// Break the type cycle.
+#[derive(Debug, Clone, Copy)]
+pub struct RawArgsInfoRef(pub &'static RawArgsInfo);
+
 #[derive(Debug)]
-pub struct RawArgsInfo {
+pub struct RawArgsInfo<A: ?Sized = [RawArgsInfoRef]> {
     /// Zero or more '\0'-terminated argument descriptions, either:
     /// `-s`, `--long`, `-s, --long=<VALUE>`, `<REQUIRED>`, or `[OPTIONAL]`.
     descriptions: &'static str,
@@ -89,21 +93,36 @@ pub struct RawArgsInfo {
     /// Help string formatter.
     #[cfg(feature = "help")]
     fmt_help: FmtWriter,
+
+    flattened: A,
 }
 
 impl RawArgsInfo {
-    pub(crate) const EMPTY_REF: &'static Self = &Self::new(false, false, None, "", "", fmt_noop);
+    pub(crate) const EMPTY_REF: &'static Self =
+        &RawArgsInfo::new(false, false, None, "", "", fmt_noop, []);
 
     // Used by proc-macro.
-    pub const fn new(
+    pub const fn new<const N: usize>(
         subcmd_optional: bool,
-        has_optional_named: bool,
+        mut has_optional_named: bool,
         subcmd_info: Option<&'static RawSubcommandInfo>,
         cmd_doc: &'static str,
         descriptions: &'static str,
         fmt_help: FmtWriter,
-    ) -> Self {
-        Self {
+        flattened: [RawArgsInfoRef; N],
+    ) -> RawArgsInfo<[RawArgsInfoRef; N]> {
+        #[cfg(feature = "help")]
+        {
+            let len = flattened.len();
+            let mut i = 0usize;
+            while i < len {
+                let inner = flattened[i];
+                has_optional_named |= inner.0.has_optional_named;
+                i += 1;
+            }
+        }
+
+        RawArgsInfo {
             descriptions,
 
             #[cfg(feature = "help")]
@@ -116,35 +135,8 @@ impl RawArgsInfo {
             cmd_doc,
             #[cfg(feature = "help")]
             fmt_help,
-        }
-    }
 
-    // Used by proc-macro for concatenation.
-    pub const fn raw_descriptions(&self) -> &str {
-        self.descriptions
-    }
-
-    // Used by proc-macro for composition.
-    pub const fn has_optional_named(&self) -> bool {
-        #[cfg(feature = "help")]
-        {
-            self.has_optional_named
-        }
-        #[cfg(not(feature = "help"))]
-        {
-            false
-        }
-    }
-
-    // Used by proc-macro for composition.
-    pub const fn fmt_help(&self) -> FmtWriter {
-        #[cfg(feature = "help")]
-        {
-            self.fmt_help
-        }
-        #[cfg(not(feature = "help"))]
-        {
-            fmt_noop
+            flattened,
         }
     }
 
@@ -160,15 +152,43 @@ impl RawArgsInfo {
         }
     }
 
+    // FIXME: This is quite complex. Can we directly codegen byte offset of
+    // description string, instead of using `idx`?
+    pub(crate) fn get_description(&self, mut idx: u8) -> Option<&'static str> {
+        // See `RawArgsInfo`.
+        let mut desc = self.descriptions;
+        while let Some((lhs, rhs)) = split_once(desc, b'\0') {
+            if idx == 0 {
+                return Some(lhs);
+            }
+            idx -= 1;
+            desc = rhs;
+        }
+        for child in &self.flattened {
+            if let Some(s) = child.0.get_description(idx) {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    #[cfg(feature = "help")]
+    pub(crate) fn has_optional_named(&self) -> bool {
+        self.has_optional_named
+    }
+
+    #[cfg(feature = "help")]
+    pub(crate) fn fmt_help(&self, w: &mut dyn fmt::Write, what: u8) {
+        (self.fmt_help)(w, what);
+        for f in &self.flattened {
+            f.0.fmt_help(w, what);
+        }
+    }
+
     #[cfg(feature = "help")]
     pub(crate) fn doc(&self) -> CommandDoc {
         let [long_about, after_long_help] = split_sep_many(self.cmd_doc, b'\0').unwrap_or([""; 2]);
         CommandDoc { long_about, after_long_help }
-    }
-
-    pub(crate) fn get_description(&self, idx: u8) -> Option<&'static str> {
-        // See `RawArgsInfo`.
-        split_terminator(self.descriptions, b'\0').nth(idx.into())
     }
 
     /// Iterate over subcommands and short descriptions.

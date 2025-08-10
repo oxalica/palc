@@ -213,6 +213,7 @@ impl ToTokens for UnitVariantStateImpl<'_> {
                     #cmd_doc,
                     "",
                     |_, _| {},
+                    [],
                 );
 
                 fn init() -> Self {
