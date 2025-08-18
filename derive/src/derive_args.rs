@@ -146,11 +146,6 @@ fn value_info(ty: &syn::Type) -> TokenStream {
     quote_spanned! {ty.span()=> __rt::arg_value_info!(#ty) }
 }
 
-fn value_parsed(ty: &syn::Type) -> TokenStream {
-    let value_info = value_info(ty);
-    quote_spanned! {ty.span()=> __rt::parse_take_arg(__arg, #value_info)? }
-}
-
 #[derive(PartialEq)]
 enum FieldFinish {
     Id,
@@ -799,72 +794,60 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             return;
         }
 
-        let handle_subcmd = if let Some(SubcommandInfo { ident, effective_ty, .. }) =
-            &def.subcommand
-        {
-            let state_name = &def.state_name;
-            quote! {
-                struct __Subcommand;
-                impl __rt::GetSubcommand for __Subcommand {
-                    type State = #state_name;
-                    type Subcommand = #effective_ty;
-                    fn get(__this: &mut Self::State) -> &mut Option<Self::Subcommand> {
-                        &mut __this.#ident
+        let handle_subcmd =
+            def.subcommand.as_ref().map(|SubcommandInfo { ident, effective_ty, .. }| {
+                let state_name = &def.state_name;
+                quote! {
+                    struct __Subcommand;
+                    impl __rt::GetSubcommand for __Subcommand {
+                        type State = #state_name;
+                        type Subcommand = #effective_ty;
+                        fn get(__this: &mut Self::State) -> &mut Option<Self::Subcommand> {
+                            &mut __this.#ident
+                        }
+                    }
+                    // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
+                    // It seems impossible to somehow return it by partly erase the subcommand type.
+                    if !__is_last
+                        && <#effective_ty as __rt::Subcommand>::feed_subcommand(__arg).is_some()
+                    {
+                        return __rt::place_for_subcommand::<__Subcommand>(self);
                     }
                 }
-                // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
-                // It seems impossible to somehow return it by partly erase the subcommand type.
-                if !__is_last
-                    && <#effective_ty as __rt::Subcommand>::feed_subcommand(__arg.as_os_str()).is_some()
-                {
-                    return __rt::place_for_subcommand::<__Subcommand>(self);
-                }
-            }
-        } else {
-            TokenStream::new()
-        };
+            });
 
         let mut arms = TokenStream::new();
         for (ord, &i) in def.unnamed_fields.iter().enumerate() {
-            let FieldInfo { ident, effective_ty, .. } = def.fields[i];
-            let parsed = value_parsed(effective_ty);
-            arms.extend(quote! {
-                #ord => self.#ident = __rt::Some(#parsed),
+            let FieldInfo { ident, effective_ty, attrs, .. } = def.fields[i];
+            let value_info = value_info(effective_ty);
+            arms.extend(quote_spanned! {effective_ty.span()=>
+                #ord => __rt::FeedUnnamed::Accept(__rt::place_for_set_value(&mut self.#ident, #value_info), #attrs),
             });
         }
 
         let catchall = if let Some(CatchallFieldInfo { field_idx, greedy }) = def.catchall_field {
-            let FieldInfo { ident, effective_ty, .. } = def.fields[field_idx];
+            let FieldInfo { ident, effective_ty, attrs, .. } = def.fields[field_idx];
+            let value_info = value_info(effective_ty);
             if greedy {
-                let value_info = value_info(effective_ty);
-                quote! { __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info) }
+                quote_spanned! {effective_ty.span()=>
+                    __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info)
+                }
             } else {
-                let parsed = value_parsed(effective_ty);
-                quote! {{ self.#ident.get_or_insert_default().push(#parsed); __rt::Ok(__rt::None) }}
+                quote_spanned! {effective_ty.span()=>
+                    __rt::FeedUnnamed::Accept(__rt::place_for_vec(&mut self.#ident, #value_info), #attrs)
+                }
             }
         } else if def.subcommand.is_some() {
             // Prefer to report "unknown subcommand" error for extra unnamed arguments.
             quote! { __rt::place_for_subcommand::<__Subcommand>(self) }
         } else {
-            quote! { __rt::Err(__rt::None) }
-        };
-
-        let non_last = if arms.is_empty() {
-            catchall
-        } else {
-            quote! {
-                match __idx {
-                    #arms
-                    _ => return #catchall
-                }
-                __rt::Ok(__rt::None)
-            }
+            quote! { __rt::FeedUnnamed::NotFound }
         };
 
         let handle_last = def.last_field.map(|idx| {
             let FieldInfo { ident, effective_ty, .. } = &def.fields[idx];
             let value_info = value_info(effective_ty);
-            quote! {
+            quote_spanned! {effective_ty.span()=>
                 if __is_last {
                     return __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info);
                 }
@@ -872,15 +855,20 @@ impl ToTokens for FeedUnnamedImpl<'_> {
         });
 
         tokens.extend(quote! {
+            // If there is no match arm.
+            #[allow(unreachable_code)]
             fn feed_unnamed(
                 &mut self,
-                __arg: &mut __rt::OsString,
+                __arg: &__rt::OsStr,
                 __idx: __rt::usize,
                 __is_last: __rt::bool,
             ) -> __rt::FeedUnnamed {
                 #handle_last
                 #handle_subcmd
-                #non_last
+                match __idx {
+                    #arms
+                    _ => #catchall
+                }
             }
         });
     }

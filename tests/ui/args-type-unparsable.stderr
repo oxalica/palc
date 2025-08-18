@@ -34,14 +34,14 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 3 |     positional: MyType,
   |                 ^^^^^^ Unparsable type
   |
-  = help: the trait `ArgValueInfo<_>` is not implemented for `MyType`
+  = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
   = note: for enum types, try `derive(palc::ValueEnum)` on it
   = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `parse_take_arg`
+note: required by a bound in `place_for_set_value`
  --> src/runtime.rs
   |
-  | pub fn parse_take_arg<T, A: ArgValueInfo<T>>(s: &mut OsString, _: A) -> Result<T> {
-  |                             ^^^^^^^^^^^^^^^ required by this bound in `parse_take_arg`
+  | pub fn place_for_set_value<T, A: ArgValueInfo<T>>(
+  |                                  ^^^^^^^^^^^^^^^ required by this bound in `place_for_set_value`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
  --> tests/ui/args-type-unparsable.rs:7:14
@@ -49,14 +49,14 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 7 |     vec: Vec<MyType>,
   |              ^^^^^^ Unparsable type
   |
-  = help: the trait `ArgValueInfo<_>` is not implemented for `MyType`
+  = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
   = note: for enum types, try `derive(palc::ValueEnum)` on it
   = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `parse_take_arg`
+note: required by a bound in `place_for_vec`
  --> src/runtime.rs
   |
-  | pub fn parse_take_arg<T, A: ArgValueInfo<T>>(s: &mut OsString, _: A) -> Result<T> {
-  |                             ^^^^^^^^^^^^^^^ required by this bound in `parse_take_arg`
+  | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn ArgPlace {
+  |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
   --> tests/ui/args-type-unparsable.rs:16:32
@@ -79,11 +79,11 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 14 |     option_vec: Option<Vec<MyType>>,
    |                            ^^^^^^ Unparsable type
    |
-   = help: the trait `ArgValueInfo<_>` is not implemented for `MyType`
+   = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
    = note: for enum types, try `derive(palc::ValueEnum)` on it
    = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `parse_take_arg`
+note: required by a bound in `place_for_vec`
   --> src/runtime.rs
    |
-   | pub fn parse_take_arg<T, A: ArgValueInfo<T>>(s: &mut OsString, _: A) -> Result<T> {
-   |                             ^^^^^^^^^^^^^^^ required by this bound in `parse_take_arg`
+   | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn ArgPlace {
+   |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`

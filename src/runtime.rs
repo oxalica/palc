@@ -138,10 +138,6 @@ pub fn assert_impl_display_for_help<T: std::fmt::Display>(x: T) -> T {
     x
 }
 
-pub fn parse_take_arg<T, A: ArgValueInfo<T>>(s: &mut OsString, _: A) -> Result<T> {
-    A::parse(s)
-}
-
 // TODO: Check inlining behavior is expected.
 pub fn unknown_subcommand<T>(name: &OsStr) -> Result<T> {
     Err(ErrorKind::UnknownSubcommand.with_input(name.into()))
@@ -359,7 +355,7 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
         }
     }
 
-    Ok(Some(Place::<T, A>::ref_cast_mut(place)))
+    FeedUnnamed::Greedy(Place::<T, A>::ref_cast_mut(place))
 }
 
 pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnamed<'_> {
@@ -384,15 +380,18 @@ pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnam
         }
     }
 
-    Ok(Some(Place::<G>::ref_cast_mut(state)))
+    FeedUnnamed::Greedy(Place::<G>::ref_cast_mut(state))
 }
 
-/// Break on a resolved place. Continue on unknown names.
+/// `Break` on a resolved place. `Continue` on unknown names.
 /// So we can `?` in generated code of `command(flatten)`.
 pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs)>;
 
-/// This should be an enum, but be this for `?` support, which is unstable to impl.
-pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Error>>;
+pub enum FeedUnnamed<'s> {
+    Accept(&'s mut dyn ArgPlace, ArgAttrs),
+    Greedy(&'s mut dyn GreedyArgsPlace),
+    NotFound,
+}
 
 pub trait ParserState: ParserStateDyn {
     type Output;
@@ -445,10 +444,10 @@ pub trait ParserStateDyn: 'static {
     /// Try to accept an unnamed (positional) argument.
     ///
     /// `idx` is the index of logical arguments, counting each multi-value-argument as one.
-    /// `is_last` indices if a `--` has been encountered. It does not effect `idx`.
-    fn feed_unnamed(&mut self, arg: &mut OsString, idx: usize, is_last: bool) -> FeedUnnamed<'_> {
-        let _ = (arg, idx, is_last);
-        Err(None)
+    /// `is_last` indicates if a `--` has been encountered. It does not affect
+    /// the increment of `idx`.
+    fn feed_unnamed(&mut self, _arg: &OsStr, _idx: usize, _is_last: bool) -> FeedUnnamed<'_> {
+        FeedUnnamed::NotFound
     }
 
     /// Runtime reflection.
@@ -570,25 +569,33 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
                     },
                 )?;
             }
-            Arg::Unnamed(mut arg) => match chain.state.feed_unnamed(&mut arg, unnamed_idx, false) {
-                Ok(None) => unnamed_idx += 1,
-                Ok(Some(place)) => {
+            Arg::Unnamed(arg) => match chain.state.feed_unnamed(&arg, unnamed_idx, false) {
+                FeedUnnamed::Accept(place, attrs) => {
+                    unnamed_idx += 1;
+                    place.feed(&arg, attrs)?;
+                }
+                FeedUnnamed::Greedy(place) => {
                     return place.feed_greedy(arg, args, chain.cmd_name, chain.ancestors);
                 }
-                Err(Some(err)) => return Err(err),
-                Err(None) => return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg)),
+                FeedUnnamed::NotFound => {
+                    return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
+                }
             },
             Arg::DashDash => {
                 drop(arg);
                 drop(buf);
-                for mut arg in &mut args.iter {
-                    match chain.state.feed_unnamed(&mut arg, unnamed_idx, true) {
-                        Ok(None) => unnamed_idx += 1,
-                        Ok(Some(place)) => {
+                for arg in &mut args.iter {
+                    match chain.state.feed_unnamed(&arg, unnamed_idx, true) {
+                        FeedUnnamed::Accept(place, attrs) => {
+                            unnamed_idx += 1;
+                            place.feed(&arg, attrs)?;
+                        }
+                        FeedUnnamed::Greedy(place) => {
                             return place.feed_greedy(arg, args, chain.cmd_name, chain.ancestors);
                         }
-                        Err(Some(err)) => return Err(err),
-                        Err(None) => return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg)),
+                        FeedUnnamed::NotFound => {
+                            return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
+                        }
                     }
                 }
                 return Ok(());
