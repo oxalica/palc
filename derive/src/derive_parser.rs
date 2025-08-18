@@ -31,7 +31,7 @@ fn fallback(ident: &Ident) -> TokenStream {
 
         #[automatically_derived]
         impl __rt::ParserInternal for #ident {
-            fn __parse_toplevel(_: &__rt::OsStr, _: &mut __rt::ArgsIter<'_>) -> __rt::Result<Self> {
+            fn __parse_toplevel(_: &mut __rt::RawParser, _: &__rt::OsStr) -> __rt::Result<Self> {
                 __rt::unreachable!()
             }
         }
@@ -47,8 +47,8 @@ fn try_expand_for_named_struct(input: &DeriveInput, fields: &FieldsNamed) -> Res
 
         #[automatically_derived]
         impl __rt::ParserInternal for #ident {
-            fn __parse_toplevel(__program: &__rt::OsStr, __args: &mut __rt::ArgsIter<'_>) -> __rt::Result<Self> {
-                __rt::try_parse_state::<<Self as __rt::Args>::__State>(__args, __program, &mut ())
+            fn __parse_toplevel(__p: &mut __rt::RawParser, __program_name: &__rt::OsStr) -> __rt::Result<Self> {
+                __rt::try_parse_state::<<Self as __rt::Args>::__State>(__p, __program_name, &mut ())
             }
         }
     });

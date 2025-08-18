@@ -189,7 +189,7 @@ fn encode_short_name(name: &LitChar) -> String {
         emit_error!(name, "arg(short) name must NOT be '-' or ASCII control characters");
     } else if !c.is_ascii() {
         // NB. It is assumed to be ASCII in `refl::NamedArgInfo::short_args()` and
-        // `ArgsIter::next_arg()`.
+        // `RawParser::next_arg()`.
         emit_error!(
             name,
             "Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \

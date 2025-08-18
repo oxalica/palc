@@ -12,7 +12,7 @@
 use std::{ffi::OsString, path::Path};
 
 use error::ErrorKind;
-use runtime::{ArgsIter, ParserInternal};
+use runtime::{ParserInternal, RawParser};
 
 mod error;
 mod refl;
@@ -80,7 +80,7 @@ pub trait Parser: ParserInternal + Sized + 'static {
         let mut iter = iter.into_iter().map(|s| s.into());
         let arg0 = iter.next().ok_or(ErrorKind::MissingArg0)?;
         let program_name = Path::new(&arg0).file_name().unwrap_or(arg0.as_ref());
-        Self::__parse_toplevel(program_name, &mut ArgsIter::new(&mut iter))
+        Self::__parse_toplevel(&mut RawParser::new(&mut iter), program_name)
     }
 
     #[cfg(feature = "help")]

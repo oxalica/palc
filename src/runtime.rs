@@ -19,7 +19,7 @@ use super::Error;
 /// Not in public API.
 #[doc(hidden)]
 pub trait ParserInternal: Sized {
-    fn __parse_toplevel(program: &OsStr, args: &mut ArgsIter<'_>) -> Result<Self>;
+    fn __parse_toplevel(p: &mut RawParser, program_name: &OsStr) -> Result<Self>;
 }
 
 /// Trait of argument structs, for composition.
@@ -315,8 +315,8 @@ pub trait GreedyArgsPlace {
     // TODO: Maybe avoid splitting out the first argument?
     fn feed_greedy(
         &mut self,
+        p: &mut RawParser,
         arg: OsString,
-        args: &mut ArgsIter<'_>,
         // NB. Since `self` borrows the state, we cannot pass the whole
         // `ParserChain` which overlaps with `self`'s lifetime.
         // Here we destruct and pass the rest fields of the outmost node.
@@ -336,18 +336,18 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
     impl<T, A: ArgValueInfo<T>> GreedyArgsPlace for Place<T, A> {
         fn feed_greedy(
             &mut self,
+            p: &mut RawParser,
             mut arg: OsString,
-            args: &mut ArgsIter<'_>,
             _cur_cmd_name: &OsStr,
             _ancestors: &mut dyn ParserChain,
         ) -> Result<()> {
             let v = self.0.get_or_insert_default();
-            if let Some(high) = args.iter.size_hint().1 {
+            if let Some(high) = p.iter.size_hint().1 {
                 v.reserve(1 + high);
             }
             loop {
                 v.push(A::parse(&arg)?);
-                arg = match args.iter.next() {
+                arg = match p.iter.next() {
                     Some(arg) => arg,
                     None => return Ok(()),
                 };
@@ -366,15 +366,15 @@ pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnam
     impl<G: GetSubcommand> GreedyArgsPlace for Place<G> {
         fn feed_greedy(
             &mut self,
+            p: &mut RawParser,
             name: OsString,
-            args: &mut ArgsIter<'_>,
             cur_cmd_name: &OsStr,
             ancestors: &mut dyn ParserChain,
         ) -> Result<()> {
             // Recombine the state chain with the current state.
             let states =
                 &mut ParserChainNode { cmd_name: cur_cmd_name, state: &mut self.0, ancestors };
-            let subcmd = G::Subcommand::try_parse_with_name(args, &name, states)?;
+            let subcmd = G::Subcommand::try_parse_with_name(p, &name, states)?;
             *G::get(&mut self.0) = Some(subcmd);
             Ok(())
         }
@@ -472,20 +472,20 @@ pub trait Subcommand: Sized + 'static {
     }
 
     fn try_parse_with_name(
-        args: &mut ArgsIter<'_>,
+        p: &mut RawParser,
         name: &OsStr,
         states: &mut dyn ParserChain,
     ) -> Result<Self> {
         let Some(f) = Self::feed_subcommand(name) else {
             return unknown_subcommand(name);
         };
-        f(args, name, states)
+        f(p, name, states)
     }
 }
 
 /// The fn signature of [`try_parse_state`], returned by [`Subcommand::feed_subcommand`].
 pub type FeedSubcommand<T> =
-    Option<fn(args: &mut ArgsIter<'_>, subcmd: &OsStr, states: &mut dyn ParserChain) -> Result<T>>;
+    Option<fn(p: &mut RawParser, subcmd: &OsStr, states: &mut dyn ParserChain) -> Result<T>>;
 
 #[cfg(test)]
 fn _assert_feed_subcommand_ty<S: ParserState>() -> FeedSubcommand<S::Output> {
@@ -493,24 +493,24 @@ fn _assert_feed_subcommand_ty<S: ParserState>() -> FeedSubcommand<S::Output> {
 }
 
 pub fn try_parse_state<S: ParserState>(
-    args: &mut ArgsIter<'_>,
+    p: &mut RawParser,
     cmd_name: &OsStr,
     ancestors: &mut dyn ParserChain,
 ) -> Result<S::Output> {
     let mut state = S::init();
     let node = &mut ParserChainNode { cmd_name, state: &mut state, ancestors };
-    try_parse_state_dyn(args, node)?;
+    try_parse_state_dyn(p, node)?;
     state.finish()
 }
 
 /// The outlined main logic of parser.
 #[inline(never)]
-fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> Result<()> {
+fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result<()> {
     let mut buf = OsString::new();
 
     let mut unnamed_idx = 0usize;
 
-    while let Some(arg) = args.next_arg(&mut buf)? {
+    while let Some(arg) = p.next_arg(&mut buf)? {
         match arg {
             Arg::EncodedNamed(enc_name, has_eq, value) => {
                 let (place, attrs, args_info) = match <dyn ParserChain>::feed_named(chain, enc_name)
@@ -547,11 +547,11 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
                         Err(ErrorKind::MissingEq.into())
                     } else if let Some(v) = value {
                         // Inlined value after `=`.
-                        args.discard_short_args();
+                        p.discard_short_args();
                         place.feed(v, attrs)
                     } else {
                         // Next argument as the value.
-                        args.next_value(attrs.accept_hyphen)
+                        p.next_value(attrs.accept_hyphen)
                             .ok_or_else(|| ErrorKind::MissingValue.into())
                             .and_then(|mut v| {
                                 if attrs.make_lowercase {
@@ -575,7 +575,7 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
                     place.feed(&arg, attrs)?;
                 }
                 FeedUnnamed::Greedy(place) => {
-                    return place.feed_greedy(arg, args, chain.cmd_name, chain.ancestors);
+                    return place.feed_greedy(p, arg, chain.cmd_name, chain.ancestors);
                 }
                 FeedUnnamed::NotFound => {
                     return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
@@ -584,14 +584,14 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
             Arg::DashDash => {
                 drop(arg);
                 drop(buf);
-                for arg in &mut args.iter {
+                for arg in &mut p.iter {
                     match chain.state.feed_unnamed(&arg, unnamed_idx, true) {
                         FeedUnnamed::Accept(place, attrs) => {
                             unnamed_idx += 1;
                             place.feed(&arg, attrs)?;
                         }
                         FeedUnnamed::Greedy(place) => {
-                            return place.feed_greedy(arg, args, chain.cmd_name, chain.ancestors);
+                            return place.feed_greedy(p, arg, chain.cmd_name, chain.ancestors);
                         }
                         FeedUnnamed::NotFound => {
                             return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
@@ -605,8 +605,8 @@ fn try_parse_state_dyn(args: &mut ArgsIter<'_>, chain: &mut ParserChainNode) -> 
     Ok(())
 }
 
-pub struct ArgsIter<'a> {
-    iter: &'a mut dyn Iterator<Item = OsString>,
+pub struct RawParser<'i> {
+    iter: &'i mut dyn Iterator<Item = OsString>,
     /// If we are inside a short arguments bundle, the index of next short arg.
     next_short_idx: Option<NonZero<usize>>,
 }
@@ -625,8 +625,8 @@ enum Arg<'a> {
     Unnamed(OsString),
 }
 
-impl<'a> ArgsIter<'a> {
-    pub(crate) fn new(iter: &'a mut dyn Iterator<Item = OsString>) -> Self {
+impl<'i> RawParser<'i> {
+    pub(crate) fn new(iter: &'i mut dyn Iterator<Item = OsString>) -> Self {
         Self { iter, next_short_idx: None }
     }
 
