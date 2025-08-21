@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         # NB. Sync with Cargo.toml
-        rust: [nightly, beta, stable, 1.85]
+        rust: [nightly, beta, stable, 1.87]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
