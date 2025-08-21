@@ -263,16 +263,18 @@ pub trait ParserChain {
 }
 
 impl dyn ParserChain + '_ {
-    fn feed_named(
+    fn feed_global_named(
         &mut self,
         enc_name: &str,
     ) -> ControlFlow<(&mut dyn Parsable, ArgAttrs, &'static RawArgsInfo)> {
         let Some(node) = self.out() else { return ControlFlow::Continue(()) };
         let info = node.state.info();
         if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name) {
-            return ControlFlow::Break((place, attrs, info));
+            if attrs.global {
+                return ControlFlow::Break((place, attrs, info));
+            }
         }
-        node.ancestors.feed_named(enc_name)
+        node.ancestors.feed_global_named(enc_name)
     }
 }
 
@@ -471,24 +473,33 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
     while let Some(arg) = p.next_arg(&mut buf)? {
         match arg {
             Arg::EncodedNamed(enc_name, has_eq, value) => {
-                let (place, attrs, args_info) = match <dyn ParserChain>::feed_named(chain, enc_name)
-                {
-                    ControlFlow::Break(ret) => ret,
+                let args_info = chain.state.info();
+                let (place, attrs, args_info) = match chain.state.feed_named(enc_name) {
+                    ControlFlow::Break((place, attrs)) => (place, attrs, args_info),
                     ControlFlow::Continue(()) => {
-                        // TODO: Configurable help?
-                        #[cfg(feature = "help")]
-                        if enc_name == "h" || enc_name == "help" {
-                            return Err(Error::from(ErrorKind::Help).maybe_render_help(chain));
+                        match chain.ancestors.feed_global_named(enc_name) {
+                            ControlFlow::Break(ret) => ret,
+                            ControlFlow::Continue(()) => {
+                                // TODO: Configurable help?
+                                #[cfg(feature = "help")]
+                                if enc_name == "h" || enc_name == "help" {
+                                    return Err(
+                                        Error::from(ErrorKind::Help).maybe_render_help(chain)
+                                    );
+                                }
+                                let mut dec_name = String::with_capacity(2 + enc_name.len());
+                                // TODO: Dedup this code with `Error::fmt`.
+                                if enc_name.chars().nth(1).is_none() {
+                                    dec_name.push('-');
+                                } else if !enc_name.starts_with("--") {
+                                    dec_name.push_str("--");
+                                }
+                                dec_name.push_str(enc_name);
+                                return Err(
+                                    ErrorKind::UnknownNamedArgument.with_input(dec_name.into())
+                                );
+                            }
                         }
-                        let mut dec_name = String::with_capacity(2 + enc_name.len());
-                        // TODO: Dedup this code with `Error::fmt`.
-                        if enc_name.chars().nth(1).is_none() {
-                            dec_name.push('-');
-                        } else if !enc_name.starts_with("--") {
-                            dec_name.push_str("--");
-                        }
-                        dec_name.push_str(enc_name);
-                        return Err(ErrorKind::UnknownNamedArgument.with_input(dec_name.into()));
                     }
                 };
 

@@ -364,7 +364,8 @@ fn non_utf8() {
 fn global() {
     #[derive(Debug, PartialEq, Parser)]
     struct Cli {
-        #[arg(short, global = true)]
+        // Not global.
+        #[arg(short)]
         verbose: bool,
         #[arg(short, long, global = true)]
         debug: Option<u8>,
@@ -383,7 +384,9 @@ fn global() {
 
     check(["", "empty"], &Cli { verbose: false, debug: None, sub: Sub2::Empty });
     check(["", "-v", "empty"], &Cli { verbose: true, debug: None, sub: Sub2::Empty });
-    check(["", "empty", "-v"], &Cli { verbose: true, debug: None, sub: Sub2::Empty });
+
+    // Not global.
+    check_err::<Cli>(["", "empty", "-v"], expect!["unexpected argument '-v'"]);
 
     // TODO: Is this behavior expected?
     check(
