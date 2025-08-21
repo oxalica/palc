@@ -18,6 +18,7 @@ mod error;
 mod refl;
 mod runtime;
 mod shared;
+mod util;
 mod values;
 
 #[cfg(feature = "help")]
@@ -46,6 +47,7 @@ pub mod __private {
     pub use crate::runtime::*;
 
     // Macros.
+    pub use crate::util::{const_concat_impl, const_concat_len};
     pub use crate::{__const_concat, __gate_help, arg_value_info};
     pub use std::{assert, concat, env, format_args, unimplemented, unreachable};
 

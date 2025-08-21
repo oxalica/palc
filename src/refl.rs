@@ -11,6 +11,8 @@ use std::fmt;
 #[cfg(not(feature = "help"))]
 use std::marker::PhantomData;
 
+use crate::util::{split_once, split_sep_many, split_terminator};
+
 /// Runtime information of a enum of subcommands.
 #[derive(Debug)]
 pub struct RawSubcommandInfo<A: ?Sized = [&'static str]> {
@@ -212,30 +214,4 @@ impl RawArgsInfo {
 pub(crate) struct CommandDoc {
     pub(crate) long_about: &'static str,
     pub(crate) after_long_help: &'static str,
-}
-
-#[inline(never)]
-fn split_once(s: &str, b: u8) -> Option<(&str, &str)> {
-    assert!(b.is_ascii());
-    s.split_once(b as char)
-}
-
-fn split_sep_many<const N: usize>(mut s: &str, b: u8) -> Option<[&str; N]> {
-    assert!(b.is_ascii());
-    let mut arr = [""; N];
-    let (last, init) = arr.split_last_mut().unwrap();
-    for p in init {
-        (*p, s) = split_once(s, b)?;
-    }
-    *last = s;
-    Some(arr)
-}
-
-fn split_terminator(mut s: &str, b: u8) -> impl Iterator<Item = &str> + Clone {
-    assert!(b.is_ascii());
-    std::iter::from_fn(move || {
-        let (fst, rest) = split_once(s, b)?;
-        s = rest;
-        Some(fst)
-    })
 }
