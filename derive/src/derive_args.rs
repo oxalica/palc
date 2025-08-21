@@ -761,12 +761,12 @@ impl ToTokens for FeedNamedImpl<'_> {
         };
 
         let body = if arms.is_empty() {
-            quote! { #handle_else __rt::FeedNamed::Continue(()) }
+            quote! { #handle_else __rt::ControlFlow::Continue(()) }
         } else {
             quote! {
-                __rt::FeedNamed::Break(match __name {
+                __rt::ControlFlow::Break(match __name {
                     #arms
-                    _ => { #handle_else return __rt::FeedNamed::Continue(()) }
+                    _ => { #handle_else return __rt::ControlFlow::Continue(()) }
                 })
             }
         };
@@ -821,7 +821,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             let FieldInfo { ident, effective_ty, attrs, .. } = def.fields[i];
             let value_info = value_info(effective_ty);
             arms.extend(quote_spanned! {effective_ty.span()=>
-                #ord => __rt::FeedUnnamed::Accept(__rt::place_for_set_value(&mut self.#ident, #value_info), #attrs),
+                #ord => ((__rt::place_for_set_value(&mut self.#ident, #value_info), #attrs)),
             });
         }
 
@@ -830,26 +830,28 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             let value_info = value_info(effective_ty);
             if greedy {
                 quote_spanned! {effective_ty.span()=>
-                    __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info)
+                    ((__rt::place_for_trailing_var_arg(&mut self.#ident, #value_info), #attrs))
                 }
             } else {
                 quote_spanned! {effective_ty.span()=>
-                    __rt::FeedUnnamed::Accept(__rt::place_for_vec(&mut self.#ident, #value_info), #attrs)
+                    ((__rt::place_for_vec(&mut self.#ident, #value_info), #attrs))
                 }
             }
         } else if def.subcommand.is_some() {
             // Prefer to report "unknown subcommand" error for extra unnamed arguments.
-            quote! { __rt::place_for_subcommand::<__Subcommand>(self) }
+            quote! {
+                return __rt::place_for_subcommand::<__Subcommand>(self)
+            }
         } else {
-            quote! { __rt::FeedUnnamed::NotFound }
+            quote! { return __rt::ControlFlow::Continue(()) }
         };
 
         let handle_last = def.last_field.map(|idx| {
-            let FieldInfo { ident, effective_ty, .. } = &def.fields[idx];
+            let FieldInfo { ident, effective_ty, attrs, .. } = &def.fields[idx];
             let value_info = value_info(effective_ty);
             quote_spanned! {effective_ty.span()=>
                 if __is_last {
-                    return __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info);
+                    return __rt::ControlFlow::Break((__rt::place_for_trailing_var_arg(&mut self.#ident, #value_info), #attrs));
                 }
             }
         });
@@ -865,10 +867,10 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             ) -> __rt::FeedUnnamed {
                 #handle_last
                 #handle_subcmd
-                match __idx {
+                __rt::ControlFlow::Break(match __idx {
                     #arms
                     _ => #catchall
-                }
+                })
             }
         });
     }

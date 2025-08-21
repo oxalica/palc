@@ -89,19 +89,44 @@ pub fn constraint_conflict<S: ParserState, T>(idx: u8) -> Result<T> {
     Err(ErrorKind::ConstraintConflict.with_arg_idx::<S>(idx))
 }
 
-/// A named argument with its place attached as `&mut self`.
-pub trait ArgPlace {
-    fn feed(&mut self, value: &OsStr, attrs: ArgAttrs) -> Result<(), Error>;
+/// Type-erased objects that can be parsed into.
+pub trait Parsable {
+    /// `attrs` is the same value returned from `feed_*`.
+    /// About `value`:
+    /// - For named arguments accepting zero values, it should be ignored.
+    /// - For named or unnamed arguments accepting one value, it is the extracted
+    ///   string to be parsed, either from `--named=value`, `-ovalue` or `value`.
+    ///   The callee should simply parse it.
+    /// - For variable length unnamed arguments, it is the first argument
+    ///   triggering the parsing. The callee should consume it and all the rest arguments.
+    ///
+    /// `cur_cmd_name` and `ancestors` are only used for subcommand, and should
+    /// be ignored otherwise. They are not passed for named arguments.
+    fn parse_from(
+        &mut self,
+        p: &mut RawParser,
+        attrs: ArgAttrs,
+        value: &OsStr,
+        cur_cmd_name: &OsStr,
+        ancestors: &mut dyn ParserChain,
+    ) -> Result<()>;
 }
 
 #[inline(always)]
-pub fn place_for_flag(place: &mut Option<bool>) -> &mut dyn ArgPlace {
+pub fn place_for_flag(place: &mut Option<bool>) -> &mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
     struct Place(Option<bool>);
 
-    impl ArgPlace for Place {
-        fn feed(&mut self, _: &OsStr, _: ArgAttrs) -> Result<(), Error> {
+    impl Parsable for Place {
+        fn parse_from(
+            &mut self,
+            _: &mut RawParser,
+            _: ArgAttrs,
+            _: &OsStr,
+            _: &OsStr,
+            _: &mut dyn ParserChain,
+        ) -> Result<()> {
             if self.0.is_some() {
                 return Err(ErrorKind::DuplicatedNamedArgument.into());
             }
@@ -114,13 +139,20 @@ pub fn place_for_flag(place: &mut Option<bool>) -> &mut dyn ArgPlace {
 }
 
 #[inline(always)]
-pub fn place_for_counter(place: &mut Option<u8>) -> &mut dyn ArgPlace {
+pub fn place_for_counter(place: &mut Option<u8>) -> &mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
     struct Place(Option<u8>);
 
-    impl ArgPlace for Place {
-        fn feed(&mut self, _: &OsStr, _: ArgAttrs) -> Result<(), Error> {
+    impl Parsable for Place {
+        fn parse_from(
+            &mut self,
+            _: &mut RawParser,
+            _: ArgAttrs,
+            _: &OsStr,
+            _: &OsStr,
+            _: &mut dyn ParserChain,
+        ) -> Result<()> {
             let v = self.0.get_or_insert_default();
             *v = v.saturating_add(1);
             Ok(())
@@ -130,13 +162,20 @@ pub fn place_for_counter(place: &mut Option<u8>) -> &mut dyn ArgPlace {
     Place::ref_cast_mut(place)
 }
 
-pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn ArgPlace {
+pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
     struct Place<T, A>(Option<Vec<T>>, PhantomData<A>);
 
-    impl<T, A: ArgValueInfo<T>> ArgPlace for Place<T, A> {
-        fn feed(&mut self, value: &OsStr, attrs: ArgAttrs) -> Result<(), Error> {
+    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
+        fn parse_from(
+            &mut self,
+            _: &mut RawParser,
+            attrs: ArgAttrs,
+            value: &OsStr,
+            _: &OsStr,
+            _: &mut dyn ParserChain,
+        ) -> Result<()> {
             let v = self.0.get_or_insert_default();
             if let Some(delim) = attrs.delimiter {
                 for frag in value.split(char::from(delim.get())) {
@@ -155,13 +194,20 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) ->
 pub fn place_for_set_value<T, A: ArgValueInfo<T>>(
     place: &mut Option<T>,
     _: A,
-) -> &'_ mut dyn ArgPlace {
+) -> &'_ mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
     struct Place<T, A>(Option<T>, PhantomData<A>);
 
-    impl<T, A: ArgValueInfo<T>> ArgPlace for Place<T, A> {
-        fn feed(&mut self, value: &OsStr, _: ArgAttrs) -> Result<(), Error> {
+    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
+        fn parse_from(
+            &mut self,
+            _: &mut RawParser,
+            _: ArgAttrs,
+            value: &OsStr,
+            _: &OsStr,
+            _: &mut dyn ParserChain,
+        ) -> Result<()> {
             if self.0.is_some() {
                 return Err(ErrorKind::DuplicatedNamedArgument.into());
             }
@@ -176,13 +222,20 @@ pub fn place_for_set_value<T, A: ArgValueInfo<T>>(
 pub fn place_for_set_opt_value<T, A: ArgValueInfo<T>>(
     place: &mut Option<Option<T>>,
     _: A,
-) -> &'_ mut dyn ArgPlace {
+) -> &'_ mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
     struct Place<T, A>(Option<Option<T>>, PhantomData<A>);
 
-    impl<T, A: ArgValueInfo<T>> ArgPlace for Place<T, A> {
-        fn feed(&mut self, value: &OsStr, _: ArgAttrs) -> Result<(), Error> {
+    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
+        fn parse_from(
+            &mut self,
+            _: &mut RawParser,
+            _: ArgAttrs,
+            value: &OsStr,
+            _: &OsStr,
+            _: &mut dyn ParserChain,
+        ) -> Result<()> {
             if self.0.is_some() {
                 return Err(ErrorKind::DuplicatedNamedArgument.into());
             }
@@ -213,7 +266,7 @@ impl dyn ParserChain + '_ {
     fn feed_named(
         &mut self,
         enc_name: &str,
-    ) -> ControlFlow<(&mut dyn ArgPlace, ArgAttrs, &'static RawArgsInfo)> {
+    ) -> ControlFlow<(&mut dyn Parsable, ArgAttrs, &'static RawArgsInfo)> {
         let Some(node) = self.out() else { return ControlFlow::Continue(()) };
         let info = node.state.info();
         if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name) {
@@ -234,54 +287,36 @@ impl ParserChain for ParserChainNode<'_, '_, '_> {
     }
 }
 
-/// A greedy unnamed argument with its place attached as `&mut self`.
-///
-/// It always consumes all the rest arguments.
-pub trait GreedyArgsPlace {
-    // TODO: Maybe avoid splitting out the first argument?
-    fn feed_greedy(
-        &mut self,
-        p: &mut RawParser,
-        arg: OsString,
-        // NB. Since `self` borrows the state, we cannot pass the whole
-        // `ParserChain` which overlaps with `self`'s lifetime.
-        // Here we destruct and pass the rest fields of the outmost node.
-        cur_cmd_name: &OsStr,
-        ancestors: &mut dyn ParserChain,
-    ) -> Result<()>;
-}
-
 pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
     place: &mut Option<Vec<T>>,
     _: A,
-) -> FeedUnnamed<'_> {
+) -> &mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
     struct Place<T, A>(Option<Vec<T>>, PhantomData<A>);
 
-    impl<T, A: ArgValueInfo<T>> GreedyArgsPlace for Place<T, A> {
-        fn feed_greedy(
+    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
+        fn parse_from(
             &mut self,
             p: &mut RawParser,
-            mut arg: OsString,
-            _cur_cmd_name: &OsStr,
-            _ancestors: &mut dyn ParserChain,
+            _: ArgAttrs,
+            value: &OsStr,
+            _: &OsStr,
+            _: &mut dyn ParserChain,
         ) -> Result<()> {
             let v = self.0.get_or_insert_default();
             if let Some(high) = p.iter.size_hint().1 {
                 v.reserve(1 + high);
             }
-            loop {
+            v.push(A::parse(value)?);
+            for arg in &mut p.iter {
                 v.push(A::parse(&arg)?);
-                arg = match p.iter.next() {
-                    Some(arg) => arg,
-                    None => return Ok(()),
-                };
             }
+            Ok(())
         }
     }
 
-    FeedUnnamed::Greedy(Place::<T, A>::ref_cast_mut(place))
+    Place::<T, A>::ref_cast_mut(place)
 }
 
 pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnamed<'_> {
@@ -289,35 +324,32 @@ pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnam
     #[repr(transparent)]
     struct Place<G: GetSubcommand>(G::State);
 
-    impl<G: GetSubcommand> GreedyArgsPlace for Place<G> {
-        fn feed_greedy(
+    impl<G: GetSubcommand> Parsable for Place<G> {
+        fn parse_from(
             &mut self,
             p: &mut RawParser,
-            name: OsString,
+            _: ArgAttrs,
+            value: &OsStr,
             cur_cmd_name: &OsStr,
             ancestors: &mut dyn ParserChain,
         ) -> Result<()> {
             // Recombine the state chain with the current state.
             let states =
                 &mut ParserChainNode { cmd_name: cur_cmd_name, state: &mut self.0, ancestors };
-            let subcmd = G::Subcommand::try_parse_with_name(p, &name, states)?;
+            let subcmd = G::Subcommand::try_parse_with_name(p, value, states)?;
             *G::get(&mut self.0) = Some(subcmd);
             Ok(())
         }
     }
 
-    FeedUnnamed::Greedy(Place::<G>::ref_cast_mut(state))
+    ControlFlow::Break((Place::<G>::ref_cast_mut(state), /* unused */ ArgAttrs::new()))
 }
 
 /// `Break` on a resolved place. `Continue` on unknown names.
 /// So we can `?` in generated code of `command(flatten)`.
-pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs)>;
+pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn Parsable, ArgAttrs)>;
 
-pub enum FeedUnnamed<'s> {
-    Accept(&'s mut dyn ArgPlace, ArgAttrs),
-    Greedy(&'s mut dyn GreedyArgsPlace),
-    NotFound,
-}
+pub type FeedUnnamed<'s> = FeedNamed<'s>;
 
 pub trait ParserState: ParserStateDyn {
     type Output;
@@ -373,7 +405,7 @@ pub trait ParserStateDyn: 'static {
     /// `is_last` indicates if a `--` has been encountered. It does not affect
     /// the increment of `idx`.
     fn feed_unnamed(&mut self, _arg: &OsStr, _idx: usize, _is_last: bool) -> FeedUnnamed<'_> {
-        FeedUnnamed::NotFound
+        ControlFlow::Continue(())
     }
 
     /// Runtime reflection.
@@ -465,7 +497,7 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     if let Some(v) = value.filter(|_| enc_name.len() > 1) {
                         Err(ErrorKind::UnexpectedInlineValue.with_input(v.into()))
                     } else {
-                        place.feed("".as_ref(), attrs)
+                        place.parse_from(p, attrs, "".as_ref(), "".as_ref(), &mut ())
                     }
                 } else {
                     debug_assert_eq!(attrs.num_values, 1);
@@ -474,7 +506,7 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     } else if let Some(v) = value {
                         // Inlined value after `=`.
                         p.discard_short_args();
-                        place.feed(v, attrs)
+                        place.parse_from(p, attrs, v, "".as_ref(), &mut ())
                     } else {
                         // Next argument as the value.
                         p.next_value(attrs.accept_hyphen)
@@ -483,7 +515,7 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                                 if attrs.make_lowercase {
                                     v.make_ascii_lowercase();
                                 }
-                                place.feed(&v, attrs)
+                                place.parse_from(p, attrs, &v, "".as_ref(), &mut ())
                             })
                     }
                 }
@@ -496,30 +528,24 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                 )?;
             }
             Arg::Unnamed(arg) => match chain.state.feed_unnamed(&arg, unnamed_idx, false) {
-                FeedUnnamed::Accept(place, attrs) => {
+                ControlFlow::Break((place, attrs)) => {
                     unnamed_idx += 1;
-                    place.feed(&arg, attrs)?;
+                    place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
                 }
-                FeedUnnamed::Greedy(place) => {
-                    return place.feed_greedy(p, arg, chain.cmd_name, chain.ancestors);
-                }
-                FeedUnnamed::NotFound => {
+                ControlFlow::Continue(()) => {
                     return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
                 }
             },
             Arg::DashDash => {
                 drop(arg);
                 drop(buf);
-                for arg in &mut p.iter {
+                while let Some(arg) = p.iter.next() {
                     match chain.state.feed_unnamed(&arg, unnamed_idx, true) {
-                        FeedUnnamed::Accept(place, attrs) => {
+                        ControlFlow::Break((place, attrs)) => {
                             unnamed_idx += 1;
-                            place.feed(&arg, attrs)?;
+                            place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
                         }
-                        FeedUnnamed::Greedy(place) => {
-                            return place.feed_greedy(p, arg, chain.cmd_name, chain.ancestors);
-                        }
-                        FeedUnnamed::NotFound => {
+                        ControlFlow::Continue(()) => {
                             return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
                         }
                     }

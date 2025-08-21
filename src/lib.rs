@@ -41,6 +41,7 @@ pub mod __private {
     pub use std::fmt;
     pub use std::marker::PhantomData;
     pub use std::num::NonZero;
+    pub use std::ops::ControlFlow;
     pub use std::str::from_utf8;
     pub use {Default, Err, Fn, Iterator, None, Ok, Option, Some, Vec, bool, char, str, u8, usize};
 

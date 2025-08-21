@@ -25,7 +25,7 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 note: required by a bound in `place_for_vec`
  --> src/runtime.rs
   |
-  | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn ArgPlace {
+  | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
   |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
@@ -55,7 +55,7 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 note: required by a bound in `place_for_vec`
  --> src/runtime.rs
   |
-  | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn ArgPlace {
+  | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
   |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
@@ -70,7 +70,7 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 note: required by a bound in `place_for_vec`
   --> src/runtime.rs
    |
-   | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn ArgPlace {
+   | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
    |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
@@ -85,5 +85,5 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 note: required by a bound in `place_for_vec`
   --> src/runtime.rs
    |
-   | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn ArgPlace {
+   | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
    |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
