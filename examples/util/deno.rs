@@ -343,7 +343,9 @@ The installation root is determined, in order of precedence:
 These must be added to the path manually if required."
 )]
 struct InstallSubcommand {
-    #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(required = true, trailing_var_arg = true)]
+    // TODO: allow_hyphen_values + trailing_var_args result in parsing unknown
+    // `--options` as unnamed.
     cmd: Vec<String>,
 
     /// Executable file name

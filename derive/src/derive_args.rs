@@ -67,20 +67,33 @@ pub struct ParserStateDefImpl<'i> {
     pub output_ty: TokenStream,
     pub output_ctor: Option<TokenStream>,
 
-    /// All direct fields parsed by this impl.
-    fields: Vec<FieldInfo<'i>>,
+    named_fields: Vec<FieldInfo<'i>>,
+    unnamed_fields: Vec<FieldInfo<'i>>,
+    variable_num_unnamed: Option<VariableNumFieldInfo<'i>>,
+    /// The last argument that accepts only after `--`.  Since it's after `--`,
+    /// it is always greedy and skips subcommand or named argument handling.
+    last_unnamed: Option<FieldInfo<'i>>,
+
+    /// The total number of direct fields, excluding flattened or subcommand fields.
+    direct_field_cnt: u8,
+
     /// Indirect fields that needs delegation.
     flatten_fields: Vec<FlattenFieldInfo<'i>>,
     /// Subcommand is special.
     subcommand: Option<SubcommandInfo<'i>>,
 
-    // Classified direct fields.
-    named_fields: Vec<usize>,
-    unnamed_fields: Vec<usize>,
-    catchall_field: Option<CatchallFieldInfo>,
-    last_field: Option<usize>,
-
     cmd_meta: Option<&'i CommandMeta>,
+}
+
+impl ParserStateDefImpl<'_> {
+    /// All fields directly parsed, excluding flattened and subcommands fields.
+    fn direct_fields(&self) -> impl Iterator<Item = &FieldInfo<'_>> {
+        self.named_fields
+            .iter()
+            .chain(self.unnamed_fields.iter())
+            .chain(self.variable_num_unnamed.as_ref().map(|f| &f.info))
+            .chain(&self.last_unnamed)
+    }
 }
 
 struct FieldInfo<'i> {
@@ -109,6 +122,11 @@ struct FieldInfo<'i> {
     hide: bool,
 }
 
+struct VariableNumFieldInfo<'i> {
+    greedy: bool,
+    info: FieldInfo<'i>,
+}
+
 enum DefaultValue {
     ParseStr(LitStr),
     ValueExpr(TokenStream),
@@ -134,12 +152,6 @@ struct SubcommandInfo<'i> {
 struct FlattenFieldInfo<'i> {
     ident: &'i Ident,
     effective_ty: &'i syn::Type,
-}
-
-#[derive(Clone, Copy)]
-struct CatchallFieldInfo {
-    field_idx: usize,
-    greedy: bool,
 }
 
 fn value_info(ty: &syn::Type) -> TokenStream {
@@ -219,23 +231,17 @@ pub fn expand_state_def_impl<'i>(
         state_name,
         output_ty,
         output_ctor: None,
-        fields: Vec::with_capacity(fields.len()),
-        flatten_fields: Vec::new(),
-        subcommand: None,
 
         named_fields: Vec::new(),
         unnamed_fields: Vec::new(),
-        catchall_field: None,
-        last_field: None,
-        cmd_meta,
-    };
+        variable_num_unnamed: None,
+        last_unnamed: None,
+        direct_field_cnt: 0,
 
-    let mut variable_len_arg_span = None;
-    let mut check_variable_len_arg = |span: Span| {
-        if let Some(prev) = variable_len_arg_span.replace(span) {
-            emit_error!(span, "duplicated variable-length arguments");
-            emit_error!(prev, "previously defined here");
-        }
+        flatten_fields: Vec::new(),
+        subcommand: None,
+
+        cmd_meta,
     };
 
     let mut seen_enc_names = HashMap::new();
@@ -254,12 +260,16 @@ pub fn expand_state_def_impl<'i>(
         let mut arg = match attrs {
             ArgOrCommand::Arg(arg) => arg,
             ArgOrCommand::Command(ArgsCommandMeta::Subcommand) => {
-                check_variable_len_arg(ident.span());
                 let (optional, effective_ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
                     Some(subty) => (true, subty),
                     None => (false, &field.ty),
                 };
-                out.subcommand = Some(SubcommandInfo { ident, effective_ty, optional });
+                if let Some(prev) = &out.subcommand {
+                    emit_error!(ident, "duplicated subcommand");
+                    emit_error!(prev.ident, "previously defined here");
+                } else {
+                    out.subcommand = Some(SubcommandInfo { ident, effective_ty, optional });
+                }
                 continue;
             }
             ArgOrCommand::Command(ArgsCommandMeta::Flatten) => {
@@ -432,7 +442,6 @@ pub fn expand_state_def_impl<'i>(
                 buf
             };
 
-            let field_idx = out.fields.len();
             let attrs = ArgAttrs {
                 num_values,
                 require_eq: arg.require_equals,
@@ -441,11 +450,11 @@ pub fn expand_state_def_impl<'i>(
                 global: arg.global,
                 required,
                 make_lowercase: arg.ignore_case,
-                index: field_idx as _,
+                index: out.direct_field_cnt,
             };
+            out.direct_field_cnt += 1;
 
-            out.named_fields.push(field_idx);
-            out.fields.push(FieldInfo {
+            out.named_fields.push(FieldInfo {
                 ident,
                 kind,
                 effective_ty,
@@ -474,16 +483,23 @@ pub fn expand_state_def_impl<'i>(
                 emit_error!(ident, "TODO: arg(default_value_t) supports named arguments yet");
                 continue;
             }
+            if accept_hyphen != AcceptHyphen::No {
+                emit_error!(
+                    ident,
+                    "arg(allow_hyphen_values) can only be used on \
+                    named arguments or arg(trailing_var_arg) yet",
+                );
+            }
 
-            let is_vec_like = matches!(kind, FieldKind::OptionVec);
+            // Does this argument accept a variable number of input arguments?
+            let is_variable_num = matches!(kind, FieldKind::OptionVec);
 
             let mut description =
                 if required { format!("<{value_name}>") } else { format!("[{value_name}]") };
-            if is_vec_like {
+            if is_variable_num {
                 description.push_str("...");
             }
 
-            let field_idx = out.fields.len();
             let attrs = ArgAttrs {
                 num_values: 1,
                 require_eq: false,
@@ -492,9 +508,10 @@ pub fn expand_state_def_impl<'i>(
                 global: false,
                 required,
                 make_lowercase: false,
-                index: field_idx as _,
+                index: out.direct_field_cnt,
             };
-            out.fields.push(FieldInfo {
+            out.direct_field_cnt += 1;
+            let info = FieldInfo {
                 ident,
                 kind,
                 effective_ty,
@@ -508,41 +525,42 @@ pub fn expand_state_def_impl<'i>(
                 description,
                 doc: arg.doc,
                 hide: arg.hide,
-            });
-
-            let allow_accept_hyphen = if arg.last {
-                // Last argument(s).
-                if let Some(prev) = out.last_field.replace(field_idx) {
-                    emit_error!(ident, "duplicated arg(last)");
-                    emit_error!(out.fields[prev].ident.span(), "previously defined here");
-                }
-
-                // `allow_hyphen_values` is allowed for last arguments, though it is already assumed.
-                true
-            } else if is_vec_like {
-                // Variable length unnamed argument.
-
-                let greedy = arg.trailing_var_arg;
-                check_variable_len_arg(ident.span());
-                out.catchall_field = Some(CatchallFieldInfo { field_idx, greedy });
-                greedy
-            } else {
-                // Single unnamed argument.
-                out.unnamed_fields.push(field_idx);
-                false
             };
 
-            if accept_hyphen != AcceptHyphen::No && !allow_accept_hyphen {
-                emit_error!(
-                    ident,
-                    "arg(allow_hyphen_values) can only be used on \
-                    named arguments or arg(trailing_var_arg) yet",
-                );
+            if arg.last {
+                // Last argument(s).
+                if let Some(prev) = &out.last_unnamed {
+                    emit_error!(ident, "duplicated arg(last)");
+                    emit_error!(prev.ident, "previously defined here");
+                } else {
+                    out.last_unnamed = Some(info);
+                }
+            } else if is_variable_num {
+                // Variable length unnamed argument.
+                if let Some(prev) = &out.variable_num_unnamed {
+                    emit_error!(ident, "duplicated variable-length arguments");
+                    emit_error!(prev.info.ident, "previously defined here");
+                } else {
+                    out.variable_num_unnamed =
+                        Some(VariableNumFieldInfo { greedy: arg.trailing_var_arg, info });
+                }
+            } else {
+                // Single unnamed argument.
+
+                if let Some(prev) = &out.variable_num_unnamed {
+                    emit_error!(
+                        ident,
+                        "cannot have more unnamed arguments after a variable-length arguments"
+                    );
+                    emit_error!(prev.info.ident, "previous variable-length argument");
+                }
+
+                out.unnamed_fields.push(info);
             }
         }
     }
 
-    if let Some(f) = out.fields.iter().find(|f| f.exclusive) {
+    if let Some(f) = out.direct_fields().find(|f| f.exclusive) {
         if !out.flatten_fields.is_empty() {
             emit_error!(
                 f.ident,
@@ -556,7 +574,7 @@ pub fn expand_state_def_impl<'i>(
 
 impl ToTokens for ParserStateDefImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self { vis, state_name, output_ty, fields, .. } = self;
+        let Self { vis, state_name, output_ty, .. } = self;
 
         // State initialization and finalization.
         //
@@ -568,8 +586,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let mut field_tys = Vec::new();
         let mut field_inits = Vec::new();
         let mut field_finishes = Vec::new();
-        for &idx in self.named_fields.iter().chain(&self.unnamed_fields).chain(&self.last_field) {
-            let FieldInfo { ident, effective_ty, finish, kind, .. } = &fields[idx];
+        for FieldInfo { ident, effective_ty, finish, kind, .. } in self.direct_fields() {
             field_names.push(*ident);
             match kind {
                 FieldKind::Counter | FieldKind::Option | FieldKind::BoolSetTrue => {
@@ -598,13 +615,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
             };
             field_finishes.push(quote! { self.#ident.take() #tail });
         }
-        if let Some(CatchallFieldInfo { field_idx, .. }) = self.catchall_field {
-            let FieldInfo { ident, effective_ty, finish, .. } = &fields[field_idx];
-            field_names.push(*ident);
-            field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
-            field_inits.push(quote! { __rt::None });
-            field_finishes.push(quote! { self.#ident.take() #finish });
-        }
         for &FlattenFieldInfo { ident, effective_ty } in &self.flatten_fields {
             field_names.push(ident);
             field_tys.push(
@@ -628,8 +638,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 );
             });
         }
-        for &idx in &self.named_fields {
-            let FieldInfo { effective_ty, attrs, .. } = &self.fields[idx];
+        for FieldInfo { effective_ty, attrs, .. } in &self.named_fields {
             if attrs.make_lowercase {
                 asserts.extend(quote_spanned! {effective_ty.span()=>
                     __rt::assert!(
@@ -649,8 +658,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let raw_args_info = RawArgsInfo(self);
         let has_subcommand = self.subcommand.is_some();
 
-        let self_arg_cnt = self.fields.len() as u8;
-        let self_unnamed_arg_cnt = self.unnamed_fields.len() as u8;
+        let direct_field_cnt = self.direct_field_cnt;
+        let direct_unnamed_arg_cnt = self.unnamed_fields.len() as u8;
         let flatten_tys1 = self.flatten_fields.iter().map(|f| f.effective_ty);
         let flatten_tys2 = flatten_tys1.clone();
 
@@ -666,9 +675,9 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 const RAW_ARGS_INFO: &'static __rt::RawArgsInfo = #raw_args_info;
                 const HAS_SUBCOMMAND: __rt::bool = #has_subcommand;
 
-                const TOTAL_ARG_CNT: __rt::u8 = #self_arg_cnt
+                const TOTAL_ARG_CNT: __rt::u8 = #direct_field_cnt
                     #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*;
-                const TOTAL_UNNAMED_ARG_CNT: __rt::u8 = #self_unnamed_arg_cnt
+                const TOTAL_UNNAMED_ARG_CNT: __rt::u8 = #direct_unnamed_arg_cnt
                     #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
                 #[allow(clippy::unnecessary_lazy_evaluations)]
@@ -716,9 +725,7 @@ impl ToTokens for FeedNamedImpl<'_> {
         let arms = def
             .named_fields
             .iter()
-            .map(|&idx| {
-                let FieldInfo { ident, kind, effective_ty, enc_names, attrs, .. } =
-                    &def.fields[idx];
+            .map(|FieldInfo { ident, kind, effective_ty, enc_names, attrs, .. }| {
                 let value_info = value_info(effective_ty);
                 let action = match kind {
                     FieldKind::BoolSetTrue => quote_spanned! {effective_ty.span()=>
@@ -742,13 +749,13 @@ impl ToTokens for FeedNamedImpl<'_> {
             .collect::<TokenStream>();
 
         let handle_else = {
-            let self_field_cnt = def.fields.len() as u8;
+            let direct_field_cnt = def.direct_field_cnt;
             let flatten_names = def.flatten_fields.iter().map(|f| f.ident);
             let offsets = (0..def.flatten_fields.len())
                 .map(|i| {
                     let prefix_tys = def.flatten_fields[..i].iter().map(|f| f.effective_ty);
                     quote! {
-                        #self_field_cnt
+                        #direct_field_cnt
                         #( + <<#prefix_tys as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*
                     }
                 });
@@ -787,9 +794,9 @@ impl ToTokens for FeedUnnamedImpl<'_> {
         let def = self.0;
 
         if def.unnamed_fields.is_empty()
-            && def.catchall_field.is_none()
+            && def.variable_num_unnamed.is_none()
+            && def.last_unnamed.is_none()
             && def.subcommand.is_none()
-            && def.last_field.is_none()
         {
             return;
         }
@@ -817,37 +824,40 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             });
 
         let mut arms = TokenStream::new();
-        for (ord, &i) in def.unnamed_fields.iter().enumerate() {
-            let FieldInfo { ident, effective_ty, attrs, .. } = def.fields[i];
+        for (ord, FieldInfo { ident, effective_ty, attrs, .. }) in
+            def.unnamed_fields.iter().enumerate()
+        {
             let value_info = value_info(effective_ty);
             arms.extend(quote_spanned! {effective_ty.span()=>
-                #ord => ((__rt::place_for_set_value(&mut self.#ident, #value_info), #attrs)),
+                #ord => (__rt::place_for_set_value(&mut self.#ident, #value_info), #attrs),
             });
         }
 
-        let catchall = if let Some(CatchallFieldInfo { field_idx, greedy }) = def.catchall_field {
-            let FieldInfo { ident, effective_ty, attrs, .. } = def.fields[field_idx];
+        // Note: The catchall path is only entered if the subcommand does not match.
+        let catchall = if let Some(VariableNumFieldInfo {
+            greedy,
+            info: FieldInfo { ident, effective_ty, attrs, .. },
+        }) = &def.variable_num_unnamed
+        {
             let value_info = value_info(effective_ty);
-            if greedy {
+            if *greedy {
                 quote_spanned! {effective_ty.span()=>
-                    ((__rt::place_for_trailing_var_arg(&mut self.#ident, #value_info), #attrs))
+                    (__rt::place_for_trailing_var_arg(&mut self.#ident, #value_info), #attrs)
                 }
             } else {
                 quote_spanned! {effective_ty.span()=>
-                    ((__rt::place_for_vec(&mut self.#ident, #value_info), #attrs))
+                    (__rt::place_for_vec(&mut self.#ident, #value_info), #attrs)
                 }
             }
         } else if def.subcommand.is_some() {
-            // Prefer to report "unknown subcommand" error for extra unnamed arguments.
-            quote! {
-                return __rt::place_for_subcommand::<__Subcommand>(self)
-            }
+            // Here we know the previous subcommand parse failed.
+            // Just to report "unknown subcommand" error for it.
+            quote! { return __rt::place_for_subcommand::<__Subcommand>(self) }
         } else {
             quote! { return __rt::ControlFlow::Continue(()) }
         };
 
-        let handle_last = def.last_field.map(|idx| {
-            let FieldInfo { ident, effective_ty, attrs, .. } = &def.fields[idx];
+        let handle_last = def.last_unnamed.as_ref().map(|FieldInfo { ident, effective_ty, attrs, .. }| {
             let value_info = value_info(effective_ty);
             quote_spanned! {effective_ty.span()=>
                 if __is_last {
@@ -882,14 +892,15 @@ impl ToTokens for ValidationImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let def = self.0;
 
-        if def.fields.iter().any(|f| f.exclusive) {
-            let names = def.fields.iter().map(|f| f.ident).chain(def.subcommand.map(|s| s.ident));
+        if def.direct_fields().any(|f| f.exclusive) {
+            // FIXME: Handle exclusive subcommand?
+            let names = def.direct_fields().map(|f| f.ident).chain(def.subcommand.map(|s| s.ident));
             tokens.extend(quote! {
                 let __argcnt = 0usize #(+ self.#names.is_some() as usize)*;
             });
         }
 
-        for (f, idx) in def.fields.iter().zip(0u8..) {
+        for (f, idx) in def.direct_fields().zip(0u8..) {
             let ident = f.ident;
             if f.attrs.required && f.default_value.is_none() {
                 tokens.extend(quote! {
@@ -942,23 +953,22 @@ impl ToTokens for ValidationImpl<'_> {
         }
 
         // Set default values after checks.
-        for FieldInfo { ident, default_value, effective_ty, .. } in &def.fields {
-            if let Some(default) = default_value {
-                let e = match default {
-                    DefaultValue::ValueExpr(e) => e,
-                    DefaultValue::ParseStr(s) => {
-                        let value_info = value_info(effective_ty);
-                        &quote_spanned! {effective_ty.span()=>
-                            __rt::parse_default_str(#s, #value_info)?
-                        }
+        for FieldInfo { ident, default_value, effective_ty, .. } in def.direct_fields() {
+            let Some(default_value) = default_value else { continue };
+            let e = match default_value {
+                DefaultValue::ValueExpr(e) => e,
+                DefaultValue::ParseStr(s) => {
+                    let value_info = value_info(effective_ty);
+                    &quote_spanned! {effective_ty.span()=>
+                        __rt::parse_default_str(#s, #value_info)?
                     }
-                };
-                tokens.extend(quote! {
-                    if self.#ident.is_none() {
-                        self.#ident = __rt::Some(#e);
-                    }
-                });
-            }
+                }
+            };
+            tokens.extend(quote! {
+                if self.#ident.is_none() {
+                    self.#ident = __rt::Some(#e);
+                }
+            });
         }
     }
 }
@@ -974,33 +984,31 @@ impl ToTokens for RawArgsInfo<'_> {
         let mut usage_unnamed = FormatArgsBuilder::default();
         let mut help_named = FormatArgsBuilder::default();
         let mut help_unnamed = FormatArgsBuilder::default();
-        for (idxs, help, usage) in [
-            (&self.0.named_fields, &mut help_named, &mut usage_named),
-            (&self.0.unnamed_fields, &mut help_unnamed, &mut usage_unnamed),
+        for (fields, help, usage) in [
+            (&self.0.named_fields[..], &mut help_named, &mut usage_named),
+            (&self.0.unnamed_fields[..], &mut help_unnamed, &mut usage_unnamed),
         ] {
-            for &idx in idxs {
-                let f = &self.0.fields[idx];
-                if f.hide {
-                    continue;
+            for f in fields {
+                if !f.hide {
+                    if f.attrs.required {
+                        usage.maybe_push_usage_for(f);
+                    }
+                    help.maybe_push_help_for(f);
                 }
-                if f.attrs.required {
-                    usage.maybe_push_usage_for(f);
-                }
-                help.maybe_push_help_for(f);
             }
         }
-        // [FOO]...
-        if let Some(c) = &self.0.catchall_field {
-            let f = &self.0.fields[c.field_idx];
-            if !f.hide {
-                usage_unnamed.maybe_push_usage_for(f);
-                help_unnamed.maybe_push_help_for(f);
+        if let Some(f) = &self.0.variable_num_unnamed {
+            if !f.info.hide {
+                // Variable unnamed fields are visible, no matter it's
+                // optional (`[ARGS]...`) or required (`<ARGS>...`).
+                usage_unnamed.maybe_push_usage_for(&f.info);
+                help_unnamed.maybe_push_help_for(&f.info);
             }
         }
         // -- [LAST]
-        if let Some(idx) = self.0.last_field {
-            let f = &self.0.fields[idx];
+        if let Some(f) = &self.0.last_unnamed {
             if !f.hide {
+                // FIXME: Optional last?
                 usage_unnamed.template.push_str(" --");
                 usage_unnamed.maybe_push_usage_for(f);
                 help_unnamed.maybe_push_help_for(f);
@@ -1019,7 +1027,7 @@ impl ToTokens for RawArgsInfo<'_> {
             }
         };
 
-        let descs = self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
+        let descs = self.0.direct_fields().flat_map(|f| [&f.description, "\0"]).collect::<String>();
 
         let (subcmd_opt, subcmd_info) = match &self.0.subcommand {
             Some(SubcommandInfo { effective_ty, optional, .. }) => (
@@ -1029,10 +1037,7 @@ impl ToTokens for RawArgsInfo<'_> {
             None => (quote! { false }, quote! { __rt::None }),
         };
 
-        let has_optional_named = self.0.named_fields.iter().any(|&idx| {
-            let f = &self.0.fields[idx];
-            !f.attrs.required && !f.hide
-        });
+        let has_optional_named = self.0.named_fields.iter().any(|f| !f.attrs.required && !f.hide);
 
         let cmd_doc = CommandDoc(self.0.cmd_meta);
         let flatten_tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);

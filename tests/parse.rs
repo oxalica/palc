@@ -459,27 +459,31 @@ fn hyphen_named() {
 fn trailing_args() {
     #[derive(Debug, Default, PartialEq, Parser)]
     struct No {
+        #[arg(short, default_value_t)]
+        debug: i8,
         #[arg(trailing_var_arg = true)]
         any: Vec<String>,
-        #[arg(short)]
-        verbose: bool,
     }
 
     #[derive(Debug, Default, PartialEq, Parser)]
     struct Yes {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        #[arg(short, default_value_t, allow_hyphen_values = true)]
+        debug: i8,
+        #[arg(trailing_var_arg = true)]
+        // TODO: allow_hyphen_values
         any: Vec<String>,
-        #[arg(short)]
-        verbose: bool,
     }
 
-    check(["", "-v"], &No { any: Vec::new(), verbose: true });
-    check(["", "a", "-v"], &No { any: vec!["a".into(), "-v".into()], verbose: false });
+    // Implicit allow_hyphen_values when already entered a trailing_var_args.
+    check(
+        ["", "-d", "1", "a", "-d", "-1"],
+        &No { debug: 1, any: vec!["a".into(), "-d".into(), "-1".into()] },
+    );
+    check_err::<No>(["", "-d", "-1"], expect!["a value is required for '-d <DEBUG>' but none was supplied"]);
     check_err::<No>(["", "-x"], expect!["unexpected argument '-x'"]);
 
-    check(["", "-v"], &Yes { any: Vec::new(), verbose: true });
-    check(["", "a", "-v"], &Yes { any: vec!["a".into(), "-v".into()], verbose: false });
-    // TODO: check(["", "-x"], &Yes { any: vec!["-x".into()], verbose: false });
+    check(["", "-d", "-1"], &Yes { any: vec![], debug: -1 });
+    // TODO: check(["", "-x", "-d", "-1"], &Yes { any: vec!["-x".into(), "-d".into(), "-1".into()], debug: 0 });
 }
 
 #[test]
@@ -513,7 +517,7 @@ fn constraint() {
     check_err::<Required>([""], expect!["the argument '--key <KEY>' is required but not provided"]);
     check_err::<Required>(
         ["", "--key=foo"],
-        expect!["the argument '<FILES>...' is required but not provided"],
+        expect!["the argument '-f' is required but not provided"],
     );
     check_err::<Required>(
         ["", "--key=foo", "path"],
