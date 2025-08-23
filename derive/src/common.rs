@@ -668,6 +668,7 @@ impl ToTokens for ArgAttrs {
             global,
             required,
             make_lowercase,
+            greedy,
             index,
         } = self;
         let delimiter_u8 = delimiter.map_or(0, NonZero::get);
@@ -680,6 +681,7 @@ impl ToTokens for ArgAttrs {
                 global: #global,
                 required: #required,
                 make_lowercase: #make_lowercase,
+                greedy: #greedy,
                 index: #index,
             }
         });

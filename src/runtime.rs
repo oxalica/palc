@@ -170,19 +170,33 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) ->
     impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
         fn parse_from(
             &mut self,
-            _: &mut RawParser,
+            p: &mut RawParser,
             attrs: ArgAttrs,
             value: &OsStr,
             _: &OsStr,
             _: &mut dyn ParserChain,
         ) -> Result<()> {
             let v = self.0.get_or_insert_default();
-            if let Some(delim) = attrs.delimiter {
-                for frag in value.split(char::from(delim.get())) {
-                    v.push(A::parse(frag)?);
+
+            let feed: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.delimiter {
+                &mut move |value| {
+                    for frag in value.split(char::from(delim.get())) {
+                        v.push(A::parse(frag)?);
+                    }
+                    Ok(())
                 }
             } else {
-                v.push(A::parse(value)?);
+                &mut |value| {
+                    v.push(A::parse(value)?);
+                    Ok(())
+                }
+            };
+
+            feed(value)?;
+            if attrs.greedy {
+                for value in &mut p.iter {
+                    feed(&value)?;
+                }
             }
             Ok(())
         }
@@ -287,38 +301,6 @@ impl ParserChain for ParserChainNode<'_, '_, '_> {
         let ParserChainNode { cmd_name, state, ancestors } = self;
         Some(ParserChainNode { cmd_name, state: &mut **state, ancestors: &mut **ancestors })
     }
-}
-
-pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
-    place: &mut Option<Vec<T>>,
-    _: A,
-) -> &mut dyn Parsable {
-    #[derive(RefCast)]
-    #[repr(transparent)]
-    struct Place<T, A>(Option<Vec<T>>, PhantomData<A>);
-
-    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
-        fn parse_from(
-            &mut self,
-            p: &mut RawParser,
-            _: ArgAttrs,
-            value: &OsStr,
-            _: &OsStr,
-            _: &mut dyn ParserChain,
-        ) -> Result<()> {
-            let v = self.0.get_or_insert_default();
-            if let Some(high) = p.iter.size_hint().1 {
-                v.reserve(1 + high);
-            }
-            v.push(A::parse(value)?);
-            for arg in &mut p.iter {
-                v.push(A::parse(&arg)?);
-            }
-            Ok(())
-        }
-    }
-
-    Place::<T, A>::ref_cast_mut(place)
 }
 
 pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnamed<'_> {

@@ -18,8 +18,10 @@ pub struct ArgAttrs {
     pub global: bool,
     /// Is this argument argument required?
     pub required: bool,
-    // Make the value lowercase before parsing it?
+    /// Make the value lowercase before parsing it?
     pub make_lowercase: bool,
+    /// Is this a greedy variable-length unnamed args that consumes everything after?
+    pub greedy: bool,
 
     /// The field index in the containing struct implementing `Args`.
     pub index: u8,

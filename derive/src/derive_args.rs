@@ -69,7 +69,7 @@ pub struct ParserStateDefImpl<'i> {
 
     named_fields: Vec<FieldInfo<'i>>,
     unnamed_fields: Vec<FieldInfo<'i>>,
-    variable_num_unnamed: Option<VariableNumFieldInfo<'i>>,
+    variable_num_unnamed: Option<FieldInfo<'i>>,
     /// The last argument that accepts only after `--`.  Since it's after `--`,
     /// it is always greedy and skips subcommand or named argument handling.
     last_unnamed: Option<FieldInfo<'i>>,
@@ -88,11 +88,24 @@ pub struct ParserStateDefImpl<'i> {
 impl ParserStateDefImpl<'_> {
     /// All fields directly parsed, excluding flattened and subcommands fields.
     fn direct_fields(&self) -> impl Iterator<Item = &FieldInfo<'_>> {
-        self.named_fields
+        self.unnamed_fields
             .iter()
-            .chain(self.unnamed_fields.iter())
-            .chain(self.variable_num_unnamed.as_ref().map(|f| &f.info))
+            .chain(&self.variable_num_unnamed)
             .chain(&self.last_unnamed)
+            .chain(&self.named_fields)
+    }
+
+    fn assign_field_idx(&mut self) {
+        for (f, i) in self
+            .unnamed_fields
+            .iter_mut()
+            .chain(&mut self.variable_num_unnamed)
+            .chain(&mut self.last_unnamed)
+            .chain(&mut self.named_fields)
+            .zip(0..)
+        {
+            f.attrs.index = i;
+        }
     }
 }
 
@@ -120,11 +133,6 @@ struct FieldInfo<'i> {
     description: String,
     doc: Doc,
     hide: bool,
-}
-
-struct VariableNumFieldInfo<'i> {
-    greedy: bool,
-    info: FieldInfo<'i>,
 }
 
 enum DefaultValue {
@@ -450,7 +458,9 @@ pub fn expand_state_def_impl<'i>(
                 global: arg.global,
                 required,
                 make_lowercase: arg.ignore_case,
-                index: out.direct_field_cnt,
+                greedy: false,
+                // To be filled later.
+                index: !0,
             };
             out.direct_field_cnt += 1;
 
@@ -508,10 +518,12 @@ pub fn expand_state_def_impl<'i>(
                 global: false,
                 required,
                 make_lowercase: false,
-                index: out.direct_field_cnt,
+                greedy: arg.trailing_var_arg,
+                // To be filled later.
+                index: !0,
             };
             out.direct_field_cnt += 1;
-            let info = FieldInfo {
+            let mut info = FieldInfo {
                 ident,
                 kind,
                 effective_ty,
@@ -529,6 +541,13 @@ pub fn expand_state_def_impl<'i>(
 
             if arg.last {
                 // Last argument(s).
+                if !is_variable_num {
+                    emit_error!(ident, "TODO: arg(last) only supports Vec-like types yet");
+                }
+
+                // Last argument is after `--`, thus implicitly greedy.
+                info.attrs.greedy = true;
+
                 if let Some(prev) = &out.last_unnamed {
                     emit_error!(ident, "duplicated arg(last)");
                     emit_error!(prev.ident, "previously defined here");
@@ -539,10 +558,9 @@ pub fn expand_state_def_impl<'i>(
                 // Variable length unnamed argument.
                 if let Some(prev) = &out.variable_num_unnamed {
                     emit_error!(ident, "duplicated variable-length arguments");
-                    emit_error!(prev.info.ident, "previously defined here");
+                    emit_error!(prev.ident, "previously defined here");
                 } else {
-                    out.variable_num_unnamed =
-                        Some(VariableNumFieldInfo { greedy: arg.trailing_var_arg, info });
+                    out.variable_num_unnamed = Some(info);
                 }
             } else {
                 // Single unnamed argument.
@@ -552,13 +570,15 @@ pub fn expand_state_def_impl<'i>(
                         ident,
                         "cannot have more unnamed arguments after a variable-length arguments"
                     );
-                    emit_error!(prev.info.ident, "previous variable-length argument");
+                    emit_error!(prev.ident, "previous variable-length argument");
                 }
 
                 out.unnamed_fields.push(info);
             }
         }
     }
+
+    out.assign_field_idx();
 
     if let Some(f) = out.direct_fields().find(|f| f.exclusive) {
         if !out.flatten_fields.is_empty() {
@@ -834,34 +854,26 @@ impl ToTokens for FeedUnnamedImpl<'_> {
         }
 
         // Note: The catchall path is only entered if the subcommand does not match.
-        let catchall = if let Some(VariableNumFieldInfo {
-            greedy,
-            info: FieldInfo { ident, effective_ty, attrs, .. },
-        }) = &def.variable_num_unnamed
-        {
-            let value_info = value_info(effective_ty);
-            if *greedy {
-                quote_spanned! {effective_ty.span()=>
-                    (__rt::place_for_trailing_var_arg(&mut self.#ident, #value_info), #attrs)
-                }
-            } else {
+        let catchall =
+            if let Some(FieldInfo { ident, effective_ty, attrs, .. }) = &def.variable_num_unnamed {
+                let value_info = value_info(effective_ty);
                 quote_spanned! {effective_ty.span()=>
                     (__rt::place_for_vec(&mut self.#ident, #value_info), #attrs)
                 }
-            }
-        } else if def.subcommand.is_some() {
-            // Here we know the previous subcommand parse failed.
-            // Just to report "unknown subcommand" error for it.
-            quote! { return __rt::place_for_subcommand::<__Subcommand>(self) }
-        } else {
-            quote! { return __rt::ControlFlow::Continue(()) }
-        };
+            } else if def.subcommand.is_some() {
+                // Here we know the previous subcommand parse failed.
+                // Just to report "unknown subcommand" error for it.
+                quote! { return __rt::place_for_subcommand::<__Subcommand>(self) }
+            } else {
+                quote! { return __rt::ControlFlow::Continue(()) }
+            };
 
         let handle_last = def.last_unnamed.as_ref().map(|FieldInfo { ident, effective_ty, attrs, .. }| {
             let value_info = value_info(effective_ty);
+            // TODO: Support more kinds here.
             quote_spanned! {effective_ty.span()=>
                 if __is_last {
-                    return __rt::ControlFlow::Break((__rt::place_for_trailing_var_arg(&mut self.#ident, #value_info), #attrs));
+                    return __rt::ControlFlow::Break((__rt::place_for_vec(&mut self.#ident, #value_info), #attrs));
                 }
             }
         });
@@ -900,8 +912,9 @@ impl ToTokens for ValidationImpl<'_> {
             });
         }
 
-        for (f, idx) in def.direct_fields().zip(0u8..) {
+        for f in def.direct_fields() {
             let ident = f.ident;
+            let idx = f.attrs.index;
             if f.attrs.required && f.default_value.is_none() {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
@@ -998,11 +1011,11 @@ impl ToTokens for RawArgsInfo<'_> {
             }
         }
         if let Some(f) = &self.0.variable_num_unnamed {
-            if !f.info.hide {
+            if !f.hide {
                 // Variable unnamed fields are visible, no matter it's
                 // optional (`[ARGS]...`) or required (`<ARGS>...`).
-                usage_unnamed.maybe_push_usage_for(&f.info);
-                help_unnamed.maybe_push_help_for(&f.info);
+                usage_unnamed.maybe_push_usage_for(f);
+                help_unnamed.maybe_push_help_for(f);
             }
         }
         // -- [LAST]

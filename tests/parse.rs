@@ -514,10 +514,10 @@ fn constraint() {
         verbose: u8,
     }
 
-    check_err::<Required>([""], expect!["the argument '--key <KEY>' is required but not provided"]);
+    check_err::<Required>([""], expect!["the argument '<FILES>...' is required but not provided"]);
     check_err::<Required>(
         ["", "--key=foo"],
-        expect!["the argument '-f' is required but not provided"],
+        expect!["the argument '<FILES>...' is required but not provided"],
     );
     check_err::<Required>(
         ["", "--key=foo", "path"],
