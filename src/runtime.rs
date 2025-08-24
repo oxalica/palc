@@ -485,32 +485,29 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     }
                 };
 
-                if attrs.num_values == 0 {
+                if attrs.no_value {
                     // Only fail on long arguments with inlined values `--long=value`.
                     if let Some(v) = value.filter(|_| enc_name.len() > 1) {
                         Err(ErrorKind::UnexpectedInlineValue.with_input(v.into()))
                     } else {
                         place.parse_from(p, attrs, "".as_ref(), "".as_ref(), &mut ())
                     }
+                } else if attrs.require_eq && !has_eq {
+                    Err(ErrorKind::MissingEq.into())
+                } else if let Some(v) = value {
+                    // Inlined value after `=`.
+                    p.discard_short_args();
+                    place.parse_from(p, attrs, v, "".as_ref(), &mut ())
                 } else {
-                    debug_assert_eq!(attrs.num_values, 1);
-                    if attrs.require_eq && !has_eq {
-                        Err(ErrorKind::MissingEq.into())
-                    } else if let Some(v) = value {
-                        // Inlined value after `=`.
-                        p.discard_short_args();
-                        place.parse_from(p, attrs, v, "".as_ref(), &mut ())
-                    } else {
-                        // Next argument as the value.
-                        p.next_value(attrs.accept_hyphen)
-                            .ok_or_else(|| ErrorKind::MissingValue.into())
-                            .and_then(|mut v| {
-                                if attrs.make_lowercase {
-                                    v.make_ascii_lowercase();
-                                }
-                                place.parse_from(p, attrs, &v, "".as_ref(), &mut ())
-                            })
-                    }
+                    // Next argument as the value.
+                    p.next_value(attrs.accept_hyphen)
+                        .ok_or_else(|| ErrorKind::MissingValue.into())
+                        .and_then(|mut v| {
+                            if attrs.make_lowercase {
+                                v.make_ascii_lowercase();
+                            }
+                            place.parse_from(p, attrs, &v, "".as_ref(), &mut ())
+                        })
                 }
                 .map_err(
                     #[cold]

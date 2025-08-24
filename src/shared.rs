@@ -5,9 +5,8 @@ use std::num::NonZero;
 // TODO: Is it better to encode this as an integer to reduce proc-macro codegen?
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ArgAttrs {
-    /// The number of values this argument expects.
-    /// Currently only 0 and 1 are implemented.
-    pub num_values: u8,
+    /// Is this a named flag that accepts no value?
+    pub no_value: bool,
     /// Does this argument require an inlined value via `=`?
     pub require_eq: bool,
     /// Does this argument eat the next raw argument even if it starts with `-`?
@@ -16,8 +15,6 @@ pub struct ArgAttrs {
     pub delimiter: Option<NonZero<u8>>,
     /// Is this a global argument?
     pub global: bool,
-    /// Is this argument argument required?
-    pub required: bool,
     /// Make the value lowercase before parsing it?
     pub make_lowercase: bool,
     /// Is this a greedy variable-length unnamed args that consumes everything after?

@@ -123,6 +123,7 @@ struct FieldInfo<'i> {
     attrs: ArgAttrs,
 
     // Validations //
+    required: bool,
     default_value: Option<DefaultValue>,
     exclusive: bool,
     dependencies: Vec<FieldPath>,
@@ -298,11 +299,11 @@ pub fn expand_state_def_impl<'i>(
             ArgTyKind::Other => (FieldKind::Option, &field.ty, FieldFinish::UnwrapChecked),
         };
 
-        let num_values = match kind {
-            FieldKind::BoolSetTrue | FieldKind::Counter => 0,
+        let no_value = match kind {
+            FieldKind::BoolSetTrue | FieldKind::Counter => true,
             // NB. OptionOption expects exactly one value, not zero. Just the value can be empty.
             // clap also agrees with this behavior.
-            FieldKind::Option | FieldKind::OptionOption | FieldKind::OptionVec => 1,
+            FieldKind::Option | FieldKind::OptionOption | FieldKind::OptionVec => false,
         };
 
         // Default values.
@@ -443,7 +444,7 @@ pub fn expand_state_def_impl<'i>(
                     (Some(short), _) => format!("-{short}"),
                     (None, None) => unreachable!(),
                 };
-                if num_values > 0 {
+                if !no_value {
                     write!(buf, "{}<{}>", if arg.require_equals { '=' } else { ' ' }, value_name)
                         .unwrap();
                 }
@@ -451,12 +452,11 @@ pub fn expand_state_def_impl<'i>(
             };
 
             let attrs = ArgAttrs {
-                num_values,
+                no_value,
                 require_eq: arg.require_equals,
                 accept_hyphen,
                 delimiter: value_delimiter,
                 global: arg.global,
-                required,
                 make_lowercase: arg.ignore_case,
                 greedy: false,
                 // To be filled later.
@@ -471,6 +471,7 @@ pub fn expand_state_def_impl<'i>(
                 finish,
                 enc_names,
                 attrs,
+                required,
                 default_value,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -511,12 +512,11 @@ pub fn expand_state_def_impl<'i>(
             }
 
             let attrs = ArgAttrs {
-                num_values: 1,
+                no_value: false,
                 require_eq: false,
                 accept_hyphen,
                 delimiter: value_delimiter,
                 global: false,
-                required,
                 make_lowercase: false,
                 greedy: arg.trailing_var_arg,
                 // To be filled later.
@@ -530,6 +530,7 @@ pub fn expand_state_def_impl<'i>(
                 finish,
                 enc_names: Vec::new(),
                 attrs,
+                required,
                 default_value,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -915,7 +916,7 @@ impl ToTokens for ValidationImpl<'_> {
         for f in def.direct_fields() {
             let ident = f.ident;
             let idx = f.attrs.index;
-            if f.attrs.required && f.default_value.is_none() {
+            if f.required {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
                         return __rt::missing_required_arg::<Self, _>(#idx)
@@ -1003,7 +1004,7 @@ impl ToTokens for RawArgsInfo<'_> {
         ] {
             for f in fields {
                 if !f.hide {
-                    if f.attrs.required {
+                    if f.required {
                         usage.maybe_push_usage_for(f);
                     }
                     help.maybe_push_help_for(f);
@@ -1050,7 +1051,7 @@ impl ToTokens for RawArgsInfo<'_> {
             None => (quote! { false }, quote! { __rt::None }),
         };
 
-        let has_optional_named = self.0.named_fields.iter().any(|f| !f.attrs.required && !f.hide);
+        let has_optional_named = self.0.named_fields.iter().any(|f| !f.required && !f.hide);
 
         let cmd_doc = CommandDoc(self.0.cmd_meta);
         let flatten_tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);

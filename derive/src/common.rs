@@ -661,12 +661,11 @@ impl ToTokens for ArgAttrs {
         }
 
         let Self {
-            num_values,
+            no_value,
             require_eq,
             accept_hyphen,
             delimiter,
             global,
-            required,
             make_lowercase,
             greedy,
             index,
@@ -674,12 +673,11 @@ impl ToTokens for ArgAttrs {
         let delimiter_u8 = delimiter.map_or(0, NonZero::get);
         tokens.extend(quote! {
             __rt::ArgAttrs {
-                num_values: #num_values,
+                no_value: #no_value,
                 require_eq: #require_eq,
                 accept_hyphen: #accept_hyphen,
                 delimiter: __rt::NonZero::new(#delimiter_u8),
                 global: #global,
-                required: #required,
                 make_lowercase: #make_lowercase,
                 greedy: #greedy,
                 index: #index,

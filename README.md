@@ -54,7 +54,7 @@ Though some of clap features are not-yet-implemented.
     - [ ] Allow hyphen values.
   - [x] Counting number of occurrence.
   - [ ] Custom ArgAction.
-  - [ ] Custom number of values (`arg(num_values)`).
+  - [ ] Custom number of values (`arg(num_args)`).
   - [ ] Overrides.
 
   - List of [magic argument types](https://docs.rs/clap/4.5.40/clap/_derive/index.html#arg-types) with automatic default behaviors:
