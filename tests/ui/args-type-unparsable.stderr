@@ -2,88 +2,118 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
  --> tests/ui/args-type-unparsable.rs:5:10
   |
 5 |     arg: MyType,
-  |          ^^^^^^ Unparsable type
+  |          ^^^^^^ unparsable value type
   |
-  = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
-  = note: for enum types, try `derive(palc::ValueEnum)` on it
-  = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `place_for_set_value`
- --> src/runtime.rs
+  = help: the trait `ValueParser` is not implemented for `MyType`
+  = note: this is an internal trait that should NOT be implemented directly
+  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+note: required by a bound in `assert_auto_infer_value_parser_ok`
+ --> src/values.rs
   |
-  | pub fn place_for_set_value<T, A: ArgValueInfo<T>>(
-  |                                  ^^^^^^^^^^^^^^^ required by this bound in `place_for_set_value`
+  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
  --> tests/ui/args-type-unparsable.rs:9:18
   |
 9 |     vec_arg: Vec<MyType>,
-  |                  ^^^^^^ Unparsable type
+  |                  ^^^^^^ unparsable value type
   |
-  = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
-  = note: for enum types, try `derive(palc::ValueEnum)` on it
-  = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `place_for_vec`
- --> src/runtime.rs
+  = help: the trait `ValueParser` is not implemented for `MyType`
+  = note: this is an internal trait that should NOT be implemented directly
+  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+note: required by a bound in `assert_auto_infer_value_parser_ok`
+ --> src/values.rs
   |
-  | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
-  |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
+  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
+
+error[E0277]: `MyType` cannot be parsed into a palc argument value
+ --> tests/ui/args-type-unparsable.rs:1:10
+  |
+1 | #[derive(palc::Args)]
+  |          ^^^^^^^^^^ unparsable value type
+  |
+  = help: the trait `ValueParser` is not implemented for `MyType`
+  = note: this is an internal trait that should NOT be implemented directly
+  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+  = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
  --> tests/ui/args-type-unparsable.rs:3:17
   |
 3 |     positional: MyType,
-  |                 ^^^^^^ Unparsable type
+  |                 ^^^^^^ unparsable value type
   |
-  = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
-  = note: for enum types, try `derive(palc::ValueEnum)` on it
-  = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `place_for_set_value`
- --> src/runtime.rs
+  = help: the trait `ValueParser` is not implemented for `MyType`
+  = note: this is an internal trait that should NOT be implemented directly
+  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+note: required by a bound in `assert_auto_infer_value_parser_ok`
+ --> src/values.rs
   |
-  | pub fn place_for_set_value<T, A: ArgValueInfo<T>>(
-  |                                  ^^^^^^^^^^^^^^^ required by this bound in `place_for_set_value`
+  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
  --> tests/ui/args-type-unparsable.rs:7:14
   |
 7 |     vec: Vec<MyType>,
-  |              ^^^^^^ Unparsable type
+  |              ^^^^^^ unparsable value type
   |
-  = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
-  = note: for enum types, try `derive(palc::ValueEnum)` on it
-  = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `place_for_vec`
- --> src/runtime.rs
+  = help: the trait `ValueParser` is not implemented for `MyType`
+  = note: this is an internal trait that should NOT be implemented directly
+  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+note: required by a bound in `assert_auto_infer_value_parser_ok`
+ --> src/values.rs
   |
-  | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
-  |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
+  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
   --> tests/ui/args-type-unparsable.rs:16:32
    |
 16 |     option_vec_arg: Option<Vec<MyType>>,
-   |                                ^^^^^^ Unparsable type
+   |                                ^^^^^^ unparsable value type
    |
-   = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
-   = note: for enum types, try `derive(palc::ValueEnum)` on it
-   = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `place_for_vec`
-  --> src/runtime.rs
+   = help: the trait `ValueParser` is not implemented for `MyType`
+   = note: this is an internal trait that should NOT be implemented directly
+   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+note: required by a bound in `assert_auto_infer_value_parser_ok`
+  --> src/values.rs
    |
-   | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
-   |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
+   | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+   |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
+
+error[E0277]: `MyType` cannot be parsed into a palc argument value
+  --> tests/ui/args-type-unparsable.rs:12:10
+   |
+12 | #[derive(palc::Args)]
+   |          ^^^^^^^^^^ unparsable value type
+   |
+   = help: the trait `ValueParser` is not implemented for `MyType`
+   = note: this is an internal trait that should NOT be implemented directly
+   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+   = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
   --> tests/ui/args-type-unparsable.rs:14:28
    |
 14 |     option_vec: Option<Vec<MyType>>,
-   |                            ^^^^^^ Unparsable type
+   |                            ^^^^^^ unparsable value type
    |
-   = help: the trait `ArgValueInfo<MyType>` is not implemented for `MyType`
-   = note: for enum types, try `derive(palc::ValueEnum)` on it
-   = note: or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it to make it parseable
-note: required by a bound in `place_for_vec`
-  --> src/runtime.rs
+   = help: the trait `ValueParser` is not implemented for `MyType`
+   = note: this is an internal trait that should NOT be implemented directly
+   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+note: required by a bound in `assert_auto_infer_value_parser_ok`
+  --> src/values.rs
    |
-   | pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
-   |                            ^^^^^^^^^^^^^^^ required by this bound in `place_for_vec`
+   | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+   |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`

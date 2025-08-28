@@ -114,7 +114,8 @@ struct FieldInfo<'i> {
     ident: &'i Ident,
     kind: FieldKind,
     /// The type used for parser inference, with `Option`/`Vec` stripped.
-    effective_ty: &'i syn::Type,
+    value_ty: &'i syn::Type,
+    value_parser: ValueParser<'i>,
     finish: FieldFinish,
 
     // Arg configurables //
@@ -136,6 +137,17 @@ struct FieldInfo<'i> {
     hide: bool,
 }
 
+struct ValueParser<'i>(&'i syn::Type);
+
+impl ToTokens for ValueParser<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let ty = self.0;
+        tokens.extend(quote_spanned! {ty.span()=>
+            __rt::assert_auto_infer_value_parser_ok(__rt::InferValueParser::<#ty, &&&()>(__rt::PhantomData).get())
+        });
+    }
+}
+
 enum DefaultValue {
     ParseStr(LitStr),
     ValueExpr(TokenStream),
@@ -153,18 +165,14 @@ enum FieldKind {
 #[derive(Clone, Copy)]
 struct SubcommandInfo<'i> {
     ident: &'i Ident,
-    effective_ty: &'i syn::Type,
+    ty: &'i syn::Type,
     optional: bool,
 }
 
 #[derive(Clone, Copy)]
 struct FlattenFieldInfo<'i> {
     ident: &'i Ident,
-    effective_ty: &'i syn::Type,
-}
-
-fn value_info(ty: &syn::Type) -> TokenStream {
-    quote_spanned! {ty.span()=> __rt::arg_value_info!(#ty) }
+    ty: &'i syn::Type,
 }
 
 #[derive(PartialEq)]
@@ -269,7 +277,7 @@ pub fn expand_state_def_impl<'i>(
         let mut arg = match attrs {
             ArgOrCommand::Arg(arg) => arg,
             ArgOrCommand::Command(ArgsCommandMeta::Subcommand) => {
-                let (optional, effective_ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
+                let (optional, ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
                     Some(subty) => (true, subty),
                     None => (false, &field.ty),
                 };
@@ -277,19 +285,19 @@ pub fn expand_state_def_impl<'i>(
                     emit_error!(ident, "duplicated subcommand");
                     emit_error!(prev.ident, "previously defined here");
                 } else {
-                    out.subcommand = Some(SubcommandInfo { ident, effective_ty, optional });
+                    out.subcommand = Some(SubcommandInfo { ident, ty, optional });
                 }
                 continue;
             }
             ArgOrCommand::Command(ArgsCommandMeta::Flatten) => {
-                out.flatten_fields.push(FlattenFieldInfo { ident, effective_ty: &field.ty });
+                out.flatten_fields.push(FlattenFieldInfo { ident, ty: &field.ty });
                 continue;
             }
         };
 
         let ty_kind = ArgTyKind::of(&field.ty);
         #[rustfmt::skip]
-        let (kind, effective_ty, finish) = match ty_kind {
+        let (kind, value_ty, finish) = match ty_kind {
             ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty, FieldFinish::UnwrapDefault),
             ArgTyKind::U8 => (FieldKind::Counter, &field.ty, FieldFinish::UnwrapDefault),
             ArgTyKind::Vec(subty) => (FieldKind::OptionVec, subty, FieldFinish::UnwrapDefault),
@@ -309,8 +317,8 @@ pub fn expand_state_def_impl<'i>(
         // Default values.
         let default_value = match (arg.default_value_t.take(), arg.default_value.take()) {
             (Some(Override::Inherit), None) => {
-                Some(DefaultValue::ValueExpr(quote_spanned! {effective_ty.span()=>
-                    <#effective_ty as __rt::Default>::default()
+                Some(DefaultValue::ValueExpr(quote_spanned! {value_ty.span()=>
+                    <#value_ty as __rt::Default>::default()
                 }))
             }
             (Some(Override::Explicit(e)), None) => {
@@ -467,7 +475,8 @@ pub fn expand_state_def_impl<'i>(
             out.named_fields.push(FieldInfo {
                 ident,
                 kind,
-                effective_ty,
+                value_ty,
+                value_parser: ValueParser(value_ty),
                 finish,
                 enc_names,
                 attrs,
@@ -526,7 +535,8 @@ pub fn expand_state_def_impl<'i>(
             let mut info = FieldInfo {
                 ident,
                 kind,
-                effective_ty,
+                value_ty,
+                value_parser: ValueParser(value_ty),
                 finish,
                 enc_names: Vec::new(),
                 attrs,
@@ -607,27 +617,27 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let mut field_tys = Vec::new();
         let mut field_inits = Vec::new();
         let mut field_finishes = Vec::new();
-        for FieldInfo { ident, effective_ty, finish, kind, .. } in self.direct_fields() {
+        for FieldInfo { ident, value_ty, finish, kind, .. } in self.direct_fields() {
             field_names.push(*ident);
             match kind {
                 FieldKind::Counter | FieldKind::Option | FieldKind::BoolSetTrue => {
-                    field_tys.push(quote! { __rt::Option<#effective_ty> });
+                    field_tys.push(quote! { __rt::Option<#value_ty> });
                     field_inits.push(quote! { __rt::None });
                 }
                 FieldKind::OptionOption => {
-                    field_tys.push(quote! { __rt::Option<__rt::Option<#effective_ty>> });
+                    field_tys.push(quote! { __rt::Option<__rt::Option<#value_ty>> });
                     field_inits.push(quote! { __rt::None });
                 }
                 FieldKind::OptionVec => {
-                    field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
+                    field_tys.push(quote! { __rt::Option<__rt::Vec<#value_ty>> });
                     field_inits.push(quote! { __rt::None });
                 }
             }
             field_finishes.push(quote! { self.#ident.take() #finish });
         }
-        if let Some(SubcommandInfo { ident, effective_ty, optional }) = self.subcommand {
+        if let Some(SubcommandInfo { ident, ty, optional }) = self.subcommand {
             field_names.push(ident);
-            field_tys.push(quote! { __rt::Option<#effective_ty> });
+            field_tys.push(quote! { __rt::Option<#ty> });
             field_inits.push(quote! { __rt::None });
             let tail = if optional {
                 quote!()
@@ -636,34 +646,32 @@ impl ToTokens for ParserStateDefImpl<'_> {
             };
             field_finishes.push(quote! { self.#ident.take() #tail });
         }
-        for &FlattenFieldInfo { ident, effective_ty } in &self.flatten_fields {
+        for &FlattenFieldInfo { ident, ty } in &self.flatten_fields {
             field_names.push(ident);
-            field_tys.push(
-                quote_spanned! {effective_ty.span()=> <#effective_ty as __rt::Args>::__State },
-            );
+            field_tys.push(quote_spanned! {ty.span()=> <#ty as __rt::Args>::__State });
             field_inits.push(quote! { __rt::ParserState::init() });
             field_finishes.push(quote! { __rt::ParserState::finish(&mut self.#ident)? });
         }
 
         // Assertions to be forced to evaluate.
         let mut asserts = TokenStream::new();
-        for FlattenFieldInfo { effective_ty, .. } in &self.flatten_fields {
-            asserts.extend(quote_spanned! {effective_ty.span()=>
+        for FlattenFieldInfo { ty, .. } in &self.flatten_fields {
+            asserts.extend(quote_spanned! {ty.span()=>
                 __rt::assert!(
-                    <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
+                    <<#ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
                     "TODO: cannot arg(flatten) positional arguments yet",
                 );
                 __rt::assert!(
-                    !<<#effective_ty as __rt::Args>::__State as __rt::ParserState>::HAS_SUBCOMMAND,
+                    !<<#ty as __rt::Args>::__State as __rt::ParserState>::HAS_SUBCOMMAND,
                     "cannot flatten an Args with subcommand",
                 );
             });
         }
-        for FieldInfo { effective_ty, attrs, .. } in &self.named_fields {
+        for FieldInfo { value_ty, attrs, .. } in &self.named_fields {
             if attrs.make_lowercase {
-                asserts.extend(quote_spanned! {effective_ty.span()=>
+                asserts.extend(quote_spanned! {value_ty.span()=>
                     __rt::assert!(
-                        <#effective_ty as __rt::ValueEnum>::NO_UPPER_CASE,
+                        <#value_ty as __rt::ValueEnum>::NO_UPPER_CASE,
                         "`arg(ignore_case)` only supports `ValueEnum` that contains no UPPERCASE variants"
                     );
                 });
@@ -681,7 +689,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
         let direct_field_cnt = self.direct_field_cnt;
         let direct_unnamed_arg_cnt = self.unnamed_fields.len() as u8;
-        let flatten_tys1 = self.flatten_fields.iter().map(|f| f.effective_ty);
+        let flatten_tys1 = self.flatten_fields.iter().map(|f| f.ty);
         let flatten_tys2 = flatten_tys1.clone();
 
         tokens.extend(quote! {
@@ -746,23 +754,22 @@ impl ToTokens for FeedNamedImpl<'_> {
         let arms = def
             .named_fields
             .iter()
-            .map(|FieldInfo { ident, kind, effective_ty, enc_names, attrs, .. }| {
-                let value_info = value_info(effective_ty);
+            .map(|FieldInfo { ident, kind, value_parser, enc_names, attrs, .. }| {
                 let action = match kind {
-                    FieldKind::BoolSetTrue => quote_spanned! {effective_ty.span()=>
+                    FieldKind::BoolSetTrue => quote! {
                         __rt::place_for_flag(&mut self.#ident)
                     },
-                    FieldKind::Counter => quote_spanned! {effective_ty.span()=>
+                    FieldKind::Counter => quote! {
                         __rt::place_for_counter(&mut self.#ident)
                     },
-                    FieldKind::Option => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_set_value(&mut self.#ident, #value_info)
+                    FieldKind::Option => quote! {
+                        __rt::place_for_set_value(&mut self.#ident, #value_parser)
                     },
-                    FieldKind::OptionOption => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_set_opt_value(&mut self.#ident, #value_info)
+                    FieldKind::OptionOption => quote! {
+                        __rt::place_for_set_opt_value(&mut self.#ident, #value_parser)
                     },
-                    FieldKind::OptionVec => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_vec(&mut self.#ident, #value_info)
+                    FieldKind::OptionVec => quote! {
+                        __rt::place_for_vec(&mut self.#ident, #value_parser)
                     },
                 };
                 quote! { #(#enc_names)|* => (#action, #attrs), }
@@ -774,7 +781,7 @@ impl ToTokens for FeedNamedImpl<'_> {
             let flatten_names = def.flatten_fields.iter().map(|f| f.ident);
             let offsets = (0..def.flatten_fields.len())
                 .map(|i| {
-                    let prefix_tys = def.flatten_fields[..i].iter().map(|f| f.effective_ty);
+                    let prefix_tys = def.flatten_fields[..i].iter().map(|f| f.ty);
                     quote! {
                         #direct_field_cnt
                         #( + <<#prefix_tys as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*
@@ -822,44 +829,41 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             return;
         }
 
-        let handle_subcmd =
-            def.subcommand.as_ref().map(|SubcommandInfo { ident, effective_ty, .. }| {
-                let state_name = &def.state_name;
-                quote! {
-                    struct __Subcommand;
-                    impl __rt::GetSubcommand for __Subcommand {
-                        type State = #state_name;
-                        type Subcommand = #effective_ty;
-                        fn get(__this: &mut Self::State) -> &mut Option<Self::Subcommand> {
-                            &mut __this.#ident
-                        }
-                    }
-                    // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
-                    // It seems impossible to somehow return it by partly erase the subcommand type.
-                    if !__is_last
-                        && <#effective_ty as __rt::Subcommand>::feed_subcommand(__arg).is_some()
-                    {
-                        return __rt::place_for_subcommand::<__Subcommand>(self);
+        let handle_subcmd = def.subcommand.as_ref().map(|SubcommandInfo { ident, ty, .. }| {
+            let state_name = &def.state_name;
+            quote! {
+                struct __Subcommand;
+                impl __rt::GetSubcommand for __Subcommand {
+                    type State = #state_name;
+                    type Subcommand = #ty;
+                    fn get(__this: &mut Self::State) -> &mut Option<Self::Subcommand> {
+                        &mut __this.#ident
                     }
                 }
-            });
+                // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
+                // It seems impossible to somehow return it by partly erase the subcommand type.
+                if !__is_last
+                    && <#ty as __rt::Subcommand>::feed_subcommand(__arg).is_some()
+                {
+                    return __rt::place_for_subcommand::<__Subcommand>(self);
+                }
+            }
+        });
 
         let mut arms = TokenStream::new();
-        for (ord, FieldInfo { ident, effective_ty, attrs, .. }) in
+        for (ord, FieldInfo { ident, value_parser, attrs, .. }) in
             def.unnamed_fields.iter().enumerate()
         {
-            let value_info = value_info(effective_ty);
-            arms.extend(quote_spanned! {effective_ty.span()=>
-                #ord => (__rt::place_for_set_value(&mut self.#ident, #value_info), #attrs),
+            arms.extend(quote! {
+                #ord => (__rt::place_for_set_value(&mut self.#ident, #value_parser), #attrs),
             });
         }
 
         // Note: The catchall path is only entered if the subcommand does not match.
         let catchall =
-            if let Some(FieldInfo { ident, effective_ty, attrs, .. }) = &def.variable_num_unnamed {
-                let value_info = value_info(effective_ty);
-                quote_spanned! {effective_ty.span()=>
-                    (__rt::place_for_vec(&mut self.#ident, #value_info), #attrs)
+            if let Some(FieldInfo { ident, value_parser, attrs, .. }) = &def.variable_num_unnamed {
+                quote! {
+                    (__rt::place_for_vec(&mut self.#ident, #value_parser), #attrs)
                 }
             } else if def.subcommand.is_some() {
                 // Here we know the previous subcommand parse failed.
@@ -869,12 +873,11 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 quote! { return __rt::ControlFlow::Continue(()) }
             };
 
-        let handle_last = def.last_unnamed.as_ref().map(|FieldInfo { ident, effective_ty, attrs, .. }| {
-            let value_info = value_info(effective_ty);
+        let handle_last = def.last_unnamed.as_ref().map(|FieldInfo { ident, value_parser, attrs, .. }| {
             // TODO: Support more kinds here.
-            quote_spanned! {effective_ty.span()=>
+            quote! {
                 if __is_last {
-                    return __rt::ControlFlow::Break((__rt::place_for_vec(&mut self.#ident, #value_info), #attrs));
+                    return __rt::ControlFlow::Break((__rt::place_for_vec(&mut self.#ident, #value_parser), #attrs));
                 }
             }
         });
@@ -967,16 +970,13 @@ impl ToTokens for ValidationImpl<'_> {
         }
 
         // Set default values after checks.
-        for FieldInfo { ident, default_value, effective_ty, .. } in def.direct_fields() {
+        for FieldInfo { ident, default_value, value_parser, .. } in def.direct_fields() {
             let Some(default_value) = default_value else { continue };
             let e = match default_value {
                 DefaultValue::ValueExpr(e) => e,
-                DefaultValue::ParseStr(s) => {
-                    let value_info = value_info(effective_ty);
-                    &quote_spanned! {effective_ty.span()=>
-                        __rt::parse_default_str(#s, #value_info)?
-                    }
-                }
+                DefaultValue::ParseStr(s) => &quote! {
+                    __rt::parse_default_str(#s, #value_parser)?
+                },
             };
             tokens.extend(quote! {
                 if self.#ident.is_none() {
@@ -1044,17 +1044,16 @@ impl ToTokens for RawArgsInfo<'_> {
         let descs = self.0.direct_fields().flat_map(|f| [&f.description, "\0"]).collect::<String>();
 
         let (subcmd_opt, subcmd_info) = match &self.0.subcommand {
-            Some(SubcommandInfo { effective_ty, optional, .. }) => (
-                quote! { #optional },
-                quote! { __rt::Some(<#effective_ty as __rt::Subcommand>::RAW_INFO) },
-            ),
+            Some(SubcommandInfo { ty, optional, .. }) => {
+                (quote! { #optional }, quote! { __rt::Some(<#ty as __rt::Subcommand>::RAW_INFO) })
+            }
             None => (quote! { false }, quote! { __rt::None }),
         };
 
         let has_optional_named = self.0.named_fields.iter().any(|f| !f.required && !f.hide);
 
         let cmd_doc = CommandDoc(self.0.cmd_meta);
-        let flatten_tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
+        let flatten_tys = self.0.flatten_fields.iter().map(|f| f.ty);
 
         tokens.extend(quote! {
             &__rt::RawArgsInfo::new(
@@ -1107,8 +1106,8 @@ impl FormatArgsBuilder {
             let arg: &dyn ToTokens = match default {
                 DefaultValue::ParseStr(s) => s,
                 DefaultValue::ValueExpr(e) => {
-                    let effective_ty = f.effective_ty;
-                    &quote_spanned! {e.span()=> __rt::assert_impl_display_for_help::<#effective_ty>(#e) }
+                    let value_ty = f.value_ty;
+                    &quote_spanned! {e.span()=> __rt::assert_impl_display_for_help::<#value_ty>(#e) }
                 }
             };
             self.push_arg(arg);

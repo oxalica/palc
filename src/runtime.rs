@@ -11,7 +11,7 @@ use crate::Result;
 use crate::error::ErrorKind;
 use crate::refl::{RawArgsInfo, RawSubcommandInfo};
 use crate::shared::{AcceptHyphen, ArgAttrs};
-use crate::values::ArgValueInfo;
+use crate::values::ValueParser;
 
 use super::Error;
 
@@ -56,8 +56,8 @@ impl<T: 'static> ParserState for FallbackState<T> {
 impl<T: 'static> ParserStateDyn for FallbackState<T> {}
 
 // TODO: Invalid default strings are only caught at runtime, which is not ideal.
-pub fn parse_default_str<T, A: ArgValueInfo<T>>(s: &str, _: A) -> Result<T> {
-    A::parse(s.as_ref())
+pub fn parse_default_str<P: ValueParser>(s: &str, _: P) -> Result<P::Output> {
+    P::parse(s.as_ref())
 }
 
 pub fn assert_impl_display_for_help<T: std::fmt::Display>(x: T) -> T {
@@ -162,12 +162,15 @@ pub fn place_for_counter(place: &mut Option<u8>) -> &mut dyn Parsable {
     Place::ref_cast_mut(place)
 }
 
-pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) -> &mut dyn Parsable {
+pub fn place_for_vec<P: ValueParser>(
+    place: &mut Option<Vec<P::Output>>,
+    _: P,
+) -> &mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A>(Option<Vec<T>>, PhantomData<A>);
+    struct Place<P: ValueParser>(Option<Vec<P::Output>>);
 
-    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
+    impl<P: ValueParser> Parsable for Place<P> {
         fn parse_from(
             &mut self,
             p: &mut RawParser,
@@ -181,13 +184,13 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) ->
             let feed: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.delimiter {
                 &mut move |value| {
                     for frag in value.split(char::from(delim.get())) {
-                        v.push(A::parse(frag)?);
+                        v.push(P::parse(frag)?);
                     }
                     Ok(())
                 }
             } else {
                 &mut |value| {
-                    v.push(A::parse(value)?);
+                    v.push(P::parse(value)?);
                     Ok(())
                 }
             };
@@ -202,18 +205,18 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>>(place: &mut Option<Vec<T>>, _: A) ->
         }
     }
 
-    Place::<T, A>::ref_cast_mut(place)
+    Place::<P>::ref_cast_mut(place)
 }
 
-pub fn place_for_set_value<T, A: ArgValueInfo<T>>(
-    place: &mut Option<T>,
-    _: A,
+pub fn place_for_set_value<P: ValueParser>(
+    place: &mut Option<P::Output>,
+    _: P,
 ) -> &'_ mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A>(Option<T>, PhantomData<A>);
+    struct Place<P: ValueParser>(Option<P::Output>);
 
-    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
+    impl<P: ValueParser> Parsable for Place<P> {
         fn parse_from(
             &mut self,
             _: &mut RawParser,
@@ -225,23 +228,23 @@ pub fn place_for_set_value<T, A: ArgValueInfo<T>>(
             if self.0.is_some() {
                 return Err(ErrorKind::DuplicatedNamedArgument.into());
             }
-            self.0 = Some(A::parse(value)?);
+            self.0 = Some(P::parse(value)?);
             Ok(())
         }
     }
 
-    Place::<T, A>::ref_cast_mut(place)
+    Place::<P>::ref_cast_mut(place)
 }
 
-pub fn place_for_set_opt_value<T, A: ArgValueInfo<T>>(
-    place: &mut Option<Option<T>>,
-    _: A,
+pub fn place_for_set_opt_value<P: ValueParser>(
+    place: &mut Option<Option<P::Output>>,
+    _: P,
 ) -> &'_ mut dyn Parsable {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A>(Option<Option<T>>, PhantomData<A>);
+    struct Place<P: ValueParser>(Option<Option<P::Output>>);
 
-    impl<T, A: ArgValueInfo<T>> Parsable for Place<T, A> {
+    impl<P: ValueParser> Parsable for Place<P> {
         fn parse_from(
             &mut self,
             _: &mut RawParser,
@@ -253,12 +256,12 @@ pub fn place_for_set_opt_value<T, A: ArgValueInfo<T>>(
             if self.0.is_some() {
                 return Err(ErrorKind::DuplicatedNamedArgument.into());
             }
-            self.0 = Some((!value.is_empty()).then(|| A::parse(value)).transpose()?);
+            self.0 = Some((!value.is_empty()).then(|| P::parse(value)).transpose()?);
             Ok(())
         }
     }
 
-    Place::<T, A>::ref_cast_mut(place)
+    Place::<P>::ref_cast_mut(place)
 }
 
 /// The singly linked list for states of ancestor subcommands. Deeper states come first.

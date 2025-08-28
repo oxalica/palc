@@ -49,11 +49,12 @@ pub mod __private {
 
     // Macros.
     pub use crate::util::{const_concat_impl, const_concat_len};
-    pub use crate::{__const_concat, __gate_help, arg_value_info};
+    pub use crate::{__const_concat, __gate_help};
     pub use std::{assert, concat, env, format_args, unimplemented, unreachable};
 
-    // Used by `__arg_value_info!`
-    pub use crate::values::{ArgValueInfo, InferValueParser, ValueEnum};
+    pub use crate::values::{
+        InferValueParser, ValueEnum, ValueParser, assert_auto_infer_value_parser_ok,
+    };
 
     pub use crate::refl::{RawArgsInfo, RawArgsInfoRef, RawSubcommandInfo};
     pub use crate::shared::{AcceptHyphen, ArgAttrs};
