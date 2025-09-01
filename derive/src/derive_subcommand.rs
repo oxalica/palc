@@ -203,6 +203,12 @@ impl ToTokens for UnitVariantStateImpl<'_> {
         tokens.extend(quote! {
             struct #state_name;
 
+            impl ::std::default::Default for #state_name {
+                fn default() -> Self {
+                    #state_name
+                }
+            }
+
             impl __rt::ParserState for #state_name {
                 type Output = #enum_name;
 
@@ -216,9 +222,6 @@ impl ToTokens for UnitVariantStateImpl<'_> {
                     [],
                 );
 
-                fn init() -> Self {
-                    Self
-                }
                 fn finish(&mut self) -> __rt::Result<Self::Output> {
                     __rt::Ok(#enum_name::#variant_name)
                 }

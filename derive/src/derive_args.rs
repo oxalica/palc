@@ -7,8 +7,8 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, FieldsNamed, Ident, LitChar, LitStr, Visibility};
 
 use crate::common::{
-    ArgOrCommand, ArgTyKind, ArgsCommandMeta, CommandMeta, Doc, FieldPath, Override, TY_OPTION,
-    strip_ty_ctor, wrap_anon_item,
+    ArgOrCommand, ArgsCommandMeta, CommandMeta, Doc, FieldPath, Override, TY_BOOL, TY_OPTION,
+    TY_U8, TY_VEC, strip_ty_ctor, wrap_anon_item,
 };
 use crate::error::{Result, catch_errors};
 use crate::shared::{AcceptHyphen, ArgAttrs};
@@ -107,16 +107,19 @@ impl ParserStateDefImpl<'_> {
             f.attrs.index = i;
         }
     }
+
+    fn flatten_tys(&self) -> impl Iterator<Item = &syn::Type> {
+        self.flatten_fields.iter().map(|f| f.ty)
+    }
 }
 
 struct FieldInfo<'i> {
     // Basics //
     ident: &'i Ident,
-    kind: FieldKind,
+    kind: MagicKind,
     /// The type used for parser inference, with `Option`/`Vec` stripped.
     value_ty: &'i syn::Type,
     value_parser: ValueParser<'i>,
-    finish: FieldFinish,
 
     // Arg configurables //
     /// Encoded names for matching. Empty for unnamed arguments.
@@ -154,12 +157,68 @@ enum DefaultValue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FieldKind {
-    BoolSetTrue,
-    Counter,
+enum MagicKind {
+    Bool,
+    U8,
+    Value,
     Option,
     OptionOption,
+    Vec,
     OptionVec,
+}
+
+impl MagicKind {
+    fn classify(ty: &syn::Type) -> (Self, &syn::Type) {
+        let syn::Type::Path(syn::TypePath { qself: None, path }) = ty else {
+            return (MagicKind::Value, ty);
+        };
+        if path.is_ident(TY_BOOL) {
+            (MagicKind::Bool, ty)
+        } else if path.is_ident(TY_U8) {
+            (MagicKind::U8, ty)
+        } else if let Some(ty) = strip_ty_ctor(ty, TY_OPTION) {
+            if let Some(ty) = strip_ty_ctor(ty, TY_OPTION) {
+                (MagicKind::OptionOption, ty)
+            } else if let Some(subty) = strip_ty_ctor(ty, TY_VEC) {
+                (MagicKind::OptionVec, subty)
+            } else {
+                (MagicKind::Option, ty)
+            }
+        } else if let Some(ty) = strip_ty_ctor(ty, TY_VEC) {
+            (MagicKind::Vec, ty)
+        } else {
+            (MagicKind::Value, ty)
+        }
+    }
+
+    fn accepts_no_value(self) -> bool {
+        matches!(self, Self::Bool | Self::U8)
+    }
+
+    fn accepts_multiple_values(self) -> bool {
+        matches!(self, Self::Vec | Self::OptionVec)
+    }
+
+    fn place_ty(self, value_ty: &syn::Type) -> TokenStream {
+        match self {
+            MagicKind::Bool => quote! { __rt::FlagPlace },
+            MagicKind::U8 => quote! { __rt::CounterPlace },
+            MagicKind::Value | MagicKind::Option => quote! { __rt::SetValuePlace<#value_ty> },
+            MagicKind::OptionOption => quote! { __rt::SetOptionalValuePlace<#value_ty> },
+            MagicKind::Vec | MagicKind::OptionVec => quote! { __rt::VecPlace<#value_ty> },
+        }
+    }
+
+    fn finalizer(self) -> TokenStream {
+        match self {
+            MagicKind::Bool | MagicKind::U8 | MagicKind::Vec | MagicKind::Value => {
+                quote! { finish }
+            }
+            MagicKind::Option | MagicKind::OptionOption | MagicKind::OptionVec => {
+                quote! { finish_opt }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -173,23 +232,6 @@ struct SubcommandInfo<'i> {
 struct FlattenFieldInfo<'i> {
     ident: &'i Ident,
     ty: &'i syn::Type,
-}
-
-#[derive(PartialEq)]
-enum FieldFinish {
-    Id,
-    UnwrapDefault,
-    UnwrapChecked,
-}
-
-impl ToTokens for FieldFinish {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::Id => {}
-            Self::UnwrapDefault => tokens.extend(quote! { .unwrap_or_default() }),
-            Self::UnwrapChecked => tokens.extend(quote! { .unwrap() }),
-        }
-    }
 }
 
 fn encode_long_name(name: &LitStr) -> String {
@@ -295,24 +337,7 @@ pub fn expand_state_def_impl<'i>(
             }
         };
 
-        let ty_kind = ArgTyKind::of(&field.ty);
-        #[rustfmt::skip]
-        let (kind, value_ty, finish) = match ty_kind {
-            ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty, FieldFinish::UnwrapDefault),
-            ArgTyKind::U8 => (FieldKind::Counter, &field.ty, FieldFinish::UnwrapDefault),
-            ArgTyKind::Vec(subty) => (FieldKind::OptionVec, subty, FieldFinish::UnwrapDefault),
-            ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty, FieldFinish::Id),
-            ArgTyKind::Option(subty) => (FieldKind::Option, subty, FieldFinish::Id),
-            ArgTyKind::OptionOption(subty) => (FieldKind::OptionOption, subty, FieldFinish::Id),
-            ArgTyKind::Other => (FieldKind::Option, &field.ty, FieldFinish::UnwrapChecked),
-        };
-
-        let no_value = match kind {
-            FieldKind::BoolSetTrue | FieldKind::Counter => true,
-            // NB. OptionOption expects exactly one value, not zero. Just the value can be empty.
-            // clap also agrees with this behavior.
-            FieldKind::Option | FieldKind::OptionOption | FieldKind::OptionVec => false,
-        };
+        let (kind, value_ty) = MagicKind::classify(&field.ty);
 
         // Default values.
         let default_value = match (arg.default_value_t.take(), arg.default_value.take()) {
@@ -332,7 +357,7 @@ pub fn expand_state_def_impl<'i>(
             }
         };
         let required = if default_value.is_none() {
-            arg.required || finish == FieldFinish::UnwrapChecked
+            arg.required || kind == MagicKind::Value
         } else {
             if arg.required {
                 emit_error!(
@@ -343,14 +368,14 @@ pub fn expand_state_def_impl<'i>(
             false
         };
 
-        let value_delimiter = if let Some(ch) = &arg.value_delimiter {
-            let ch = ch.value();
-            if !matches!(kind, FieldKind::OptionVec) {
-                emit_error!(ch, "arg(value_delimiter) must be used on Vec-like types");
+        let value_delimiter = if let Some(lit_ch) = &arg.value_delimiter {
+            let ch = lit_ch.value();
+            if !kind.accepts_multiple_values() {
+                emit_error!(lit_ch, "arg(value_delimiter) can only be used on Vec-like types");
                 None
             } else if !ch.is_ascii() || ch.is_ascii_control() {
                 emit_error!(
-                    ch,
+                    lit_ch,
                     r#"arg(value_delimiter) must be non-control ASCII characters. \
                     A unicode codepoint is not necessarity a "character" in human sense, thus \
                     automatic splitting may give unexpected results. \
@@ -359,7 +384,7 @@ pub fn expand_state_def_impl<'i>(
                 None
             } else if !arg.is_named() {
                 emit_error!(
-                    ch,
+                    lit_ch,
                     "TODO: arg(value_delimiter) is not yet supported on unnamed arguments",
                 );
                 None
@@ -384,10 +409,11 @@ pub fn expand_state_def_impl<'i>(
                 AcceptHyphen::No
             }
         };
-        if accept_hyphen != AcceptHyphen::No
-            && matches!(kind, FieldKind::BoolSetTrue | FieldKind::Counter)
-        {
-            emit_error!(ident, "Only arguments that take values can allow hyphen values");
+        if accept_hyphen != AcceptHyphen::No && kind.accepts_no_value() {
+            emit_error!(
+                ident,
+                "arg(allow_{{hyphen,negative}}_value) is incompatible with bool or u8",
+            );
         }
 
         let value_name = match &arg.value_name {
@@ -452,7 +478,7 @@ pub fn expand_state_def_impl<'i>(
                     (Some(short), _) => format!("-{short}"),
                     (None, None) => unreachable!(),
                 };
-                if !no_value {
+                if !kind.accepts_no_value() {
                     write!(buf, "{}<{}>", if arg.require_equals { '=' } else { ' ' }, value_name)
                         .unwrap();
                 }
@@ -460,7 +486,7 @@ pub fn expand_state_def_impl<'i>(
             };
 
             let attrs = ArgAttrs {
-                no_value,
+                no_value: kind.accepts_no_value(),
                 require_eq: arg.require_equals,
                 accept_hyphen,
                 delimiter: value_delimiter,
@@ -477,7 +503,6 @@ pub fn expand_state_def_impl<'i>(
                 kind,
                 value_ty,
                 value_parser: ValueParser(value_ty),
-                finish,
                 enc_names,
                 attrs,
                 required,
@@ -512,7 +537,7 @@ pub fn expand_state_def_impl<'i>(
             }
 
             // Does this argument accept a variable number of input arguments?
-            let is_variable_num = matches!(kind, FieldKind::OptionVec);
+            let is_variable_num = kind.accepts_multiple_values();
 
             let mut description =
                 if required { format!("<{value_name}>") } else { format!("[{value_name}]") };
@@ -537,7 +562,6 @@ pub fn expand_state_def_impl<'i>(
                 kind,
                 value_ty,
                 value_parser: ValueParser(value_ty),
-                finish,
                 enc_names: Vec::new(),
                 attrs,
                 required,
@@ -607,55 +631,32 @@ impl ToTokens for ParserStateDefImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self { vis, state_name, output_ty, .. } = self;
 
-        // State initialization and finalization.
-        //
-        // T / Option<T>            => Option<T>
-        // Vec<T> / Option<Vec<T>>  => Option<Vec<T>>
-        // FlattenTy                => <FlattenTy as Args>::__State
-        // SubcommandTy             => Option<SubcommandTy>
-        let mut field_names = Vec::new();
-        let mut field_tys = Vec::new();
-        let mut field_inits = Vec::new();
-        let mut field_finishes = Vec::new();
-        for FieldInfo { ident, value_ty, finish, kind, .. } in self.direct_fields() {
-            field_names.push(*ident);
-            match kind {
-                FieldKind::Counter | FieldKind::Option | FieldKind::BoolSetTrue => {
-                    field_tys.push(quote! { __rt::Option<#value_ty> });
-                    field_inits.push(quote! { __rt::None });
-                }
-                FieldKind::OptionOption => {
-                    field_tys.push(quote! { __rt::Option<__rt::Option<#value_ty>> });
-                    field_inits.push(quote! { __rt::None });
-                }
-                FieldKind::OptionVec => {
-                    field_tys.push(quote! { __rt::Option<__rt::Vec<#value_ty>> });
-                    field_inits.push(quote! { __rt::None });
-                }
-            }
-            field_finishes.push(quote! { self.#ident.take() #finish });
-        }
-        if let Some(SubcommandInfo { ident, ty, optional }) = self.subcommand {
-            field_names.push(ident);
-            field_tys.push(quote! { __rt::Option<#ty> });
-            field_inits.push(quote! { __rt::None });
-            let tail = if optional {
-                quote!()
-            } else {
-                quote! { .unwrap() }
-            };
-            field_finishes.push(quote! { self.#ident.take() #tail });
-        }
-        for &FlattenFieldInfo { ident, ty } in &self.flatten_fields {
-            field_names.push(ident);
-            field_tys.push(quote_spanned! {ty.span()=> <#ty as __rt::Args>::__State });
-            field_inits.push(quote! { __rt::ParserState::init() });
-            field_finishes.push(quote! { __rt::ParserState::finish(&mut self.#ident)? });
-        }
+        let (field_idents, place_tys, finalizers) = self
+            .direct_fields()
+            .map(|FieldInfo { ident, value_ty, kind, .. }| {
+                let fin = kind.finalizer();
+                (
+                    *ident,
+                    kind.place_ty(value_ty),
+                    quote! { __rt::FieldState::#fin(&mut self.#ident) },
+                )
+            })
+            .chain(self.flatten_fields.iter().map(|FlattenFieldInfo { ident, ty }| {
+                (
+                    *ident,
+                    quote! { <#ty as __rt::Args>::__State },
+                    quote! { __rt::ParserState::finish(&mut self.#ident)? },
+                )
+            }))
+            .chain(self.subcommand.as_ref().map(|SubcommandInfo { ident, ty, optional }| {
+                let unwrap = (!*optional).then(|| quote! { .unwrap() });
+                (*ident, quote! { __rt::Option<#ty> }, quote! { self.#ident.take() #unwrap })
+            }))
+            .collect::<(Vec<_>, Vec<_>, Vec<_>)>();
 
         // Assertions to be forced to evaluate.
         let mut asserts = TokenStream::new();
-        for FlattenFieldInfo { ty, .. } in &self.flatten_fields {
+        for ty in self.flatten_tys() {
             asserts.extend(quote_spanned! {ty.span()=>
                 __rt::assert!(
                     <<#ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
@@ -689,12 +690,13 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
         let direct_field_cnt = self.direct_field_cnt;
         let direct_unnamed_arg_cnt = self.unnamed_fields.len() as u8;
-        let flatten_tys1 = self.flatten_fields.iter().map(|f| f.ty);
-        let flatten_tys2 = flatten_tys1.clone();
+        let flatten_tys1 = self.flatten_tys();
+        let flatten_tys2 = self.flatten_tys();
 
         tokens.extend(quote! {
+            #[derive(::std::default::Default)]
             #vis struct #state_name {
-                #(#field_names : #field_tys,)*
+                #(#field_idents: #place_tys,)*
             }
 
             #[automatically_derived]
@@ -709,17 +711,10 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 const TOTAL_UNNAMED_ARG_CNT: __rt::u8 = #direct_unnamed_arg_cnt
                     #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
-                #[allow(clippy::unnecessary_lazy_evaluations)]
-                fn init() -> Self {
-                    Self {
-                        #(#field_names : #field_inits,)*
-                    }
-                }
-
                 fn finish(&mut self) -> __rt::Result<Self::Output> {
                     #validation
                     __rt::Ok(#output_ctor {
-                        #(#field_names : #field_finishes,)*
+                        #(#field_idents : #finalizers,)*
                     })
                 }
             }
@@ -754,25 +749,8 @@ impl ToTokens for FeedNamedImpl<'_> {
         let arms = def
             .named_fields
             .iter()
-            .map(|FieldInfo { ident, kind, value_parser, enc_names, attrs, .. }| {
-                let action = match kind {
-                    FieldKind::BoolSetTrue => quote! {
-                        __rt::place_for_flag(&mut self.#ident)
-                    },
-                    FieldKind::Counter => quote! {
-                        __rt::place_for_counter(&mut self.#ident)
-                    },
-                    FieldKind::Option => quote! {
-                        __rt::place_for_set_value(&mut self.#ident, #value_parser)
-                    },
-                    FieldKind::OptionOption => quote! {
-                        __rt::place_for_set_opt_value(&mut self.#ident, #value_parser)
-                    },
-                    FieldKind::OptionVec => quote! {
-                        __rt::place_for_vec(&mut self.#ident, #value_parser)
-                    },
-                };
-                quote! { #(#enc_names)|* => (#action, #attrs), }
+            .map(|FieldInfo { ident, value_parser, enc_names, attrs, .. }| {
+                quote! { #(#enc_names)|* => (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs), }
             })
             .collect::<TokenStream>();
 
@@ -855,16 +833,14 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             def.unnamed_fields.iter().enumerate()
         {
             arms.extend(quote! {
-                #ord => (__rt::place_for_set_value(&mut self.#ident, #value_parser), #attrs),
+                #ord => (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs),
             });
         }
 
         // Note: The catchall path is only entered if the subcommand does not match.
         let catchall =
             if let Some(FieldInfo { ident, value_parser, attrs, .. }) = &def.variable_num_unnamed {
-                quote! {
-                    (__rt::place_for_vec(&mut self.#ident, #value_parser), #attrs)
-                }
+                quote! { (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs) }
             } else if def.subcommand.is_some() {
                 // Here we know the previous subcommand parse failed.
                 // Just to report "unknown subcommand" error for it.
@@ -874,10 +850,9 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             };
 
         let handle_last = def.last_unnamed.as_ref().map(|FieldInfo { ident, value_parser, attrs, .. }| {
-            // TODO: Support more kinds here.
             quote! {
                 if __is_last {
-                    return __rt::ControlFlow::Break((__rt::place_for_vec(&mut self.#ident, #value_parser), #attrs));
+                    return __rt::ControlFlow::Break((__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs));
                 }
             }
         });
@@ -908,11 +883,20 @@ impl ToTokens for ValidationImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let def = self.0;
 
-        if def.direct_fields().any(|f| f.exclusive) {
-            // FIXME: Handle exclusive subcommand?
-            let names = def.direct_fields().map(|f| f.ident).chain(def.subcommand.map(|s| s.ident));
+        let exclusive_idents =
+            def.direct_fields().filter_map(|f| f.exclusive.then_some(f.ident)).collect::<Vec<_>>();
+        if !exclusive_idents.is_empty() {
+            let subcmd = def.subcommand.as_ref().map(|SubcommandInfo { ident, .. }| {
+                quote! { self.#ident.is_some() as __rt::usize }
+            });
             tokens.extend(quote! {
-                let __argcnt = 0usize #(+ self.#names.is_some() as usize)*;
+                if 0usize
+                    #(+ __rt::FieldState::is_set(&self.#exclusive_idents) as __rt::usize)*
+                    #subcmd
+                    > 1usize
+                {
+                    __rt::todo!();
+                }
             });
         }
 
@@ -921,39 +905,32 @@ impl ToTokens for ValidationImpl<'_> {
             let idx = f.attrs.index;
             if f.required {
                 tokens.extend(quote! {
-                    if self.#ident.is_none() {
+                    if !__rt::FieldState::is_set(&self.#ident) {
                         return __rt::missing_required_arg::<Self, _>(#idx)
                     }
                 });
             }
 
             let mut checks = TokenStream::new();
-            if f.exclusive {
-                checks.extend(quote! {
-                    if __argcnt != 1 {
-                        return __rt::constraint_exclusive::<Self, _>(#idx);
-                    }
-                });
-            }
             if !f.dependencies.is_empty() {
-                let paths = f.dependencies.iter();
+                let paths = &f.dependencies;
                 checks.extend(quote! {
-                    if #(self #paths.is_none())||* {
+                    if #(!__rt::FieldState::is_set(&self #paths))||* {
                         return __rt::constraint_required::<Self, _>(#idx);
                     }
                 });
             }
             if !f.conflicts.is_empty() {
-                let paths = f.conflicts.iter();
+                let paths = &f.conflicts;
                 checks.extend(quote! {
-                    if #(self #paths.is_some())||* {
+                    if #(__rt::FieldState::is_set(&self #paths))||* {
                         return __rt::constraint_conflict::<Self, _>(#idx);
                     }
                 });
             }
             if !checks.is_empty() {
                 tokens.extend(quote! {
-                    if self.#ident.is_some() {
+                    if __rt::FieldState::is_set(&self.#ident) {
                         #checks
                     }
                 });
@@ -964,7 +941,7 @@ impl ToTokens for ValidationImpl<'_> {
         {
             tokens.extend(quote! {
                 if self.#ident.is_none() {
-                    return __rt::missing_required_subcmd()
+                    return __rt::missing_required_subcmd();
                 }
             });
         }
@@ -972,16 +949,13 @@ impl ToTokens for ValidationImpl<'_> {
         // Set default values after checks.
         for FieldInfo { ident, default_value, value_parser, .. } in def.direct_fields() {
             let Some(default_value) = default_value else { continue };
-            let e = match default_value {
-                DefaultValue::ValueExpr(e) => e,
-                DefaultValue::ParseStr(s) => &quote! {
-                    __rt::parse_default_str(#s, #value_parser)?
+            tokens.extend(match default_value {
+                DefaultValue::ValueExpr(e) => quote! {
+                    __rt::FieldState::set_default(&mut self.#ident, || #e);
                 },
-            };
-            tokens.extend(quote! {
-                if self.#ident.is_none() {
-                    self.#ident = __rt::Some(#e);
-                }
+                DefaultValue::ParseStr(s) => quote! {
+                    __rt::FieldState::set_default_parse(&mut self.#ident, #s, #value_parser);
+                },
             });
         }
     }
@@ -1053,7 +1027,7 @@ impl ToTokens for RawArgsInfo<'_> {
         let has_optional_named = self.0.named_fields.iter().any(|f| !f.required && !f.hide);
 
         let cmd_doc = CommandDoc(self.0.cmd_meta);
-        let flatten_tys = self.0.flatten_fields.iter().map(|f| f.ty);
+        let flatten_tys = self.0.flatten_tys();
 
         tokens.extend(quote! {
             &__rt::RawArgsInfo::new(

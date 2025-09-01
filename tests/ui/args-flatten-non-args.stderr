@@ -1,13 +1,57 @@
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
- --> tests/ui/args-flatten-non-args.rs:7:11
+ --> tests/ui/args-flatten-non-args.rs:4:10
   |
-7 |     deep: Deep,
-  |           ^^^^ this type is expected to have `derive(palc::Args)` but it is not
+4 | #[derive(palc::Args)]
+  |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
   |
   = help: the trait `palc::__private::Args` is not implemented for `Deep`
   = help: the following other types implement trait `palc::__private::Args`:
             Cli1
             Cli2
+  = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
+ --> tests/ui/args-flatten-non-args.rs:4:10
+  |
+4 | #[derive(palc::Args)]
+  |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
+  |
+  = help: within `Cli1State`, the trait `palc::__private::Args` is not implemented for `Deep`
+  = help: the following other types implement trait `palc::__private::Args`:
+            Cli1
+            Cli2
+note: required because it appears within the type `Cli1State`
+ --> tests/ui/args-flatten-non-args.rs:5:8
+  |
+5 | struct Cli1 {
+  |        ^^^^
+note: required by a bound in `Default`
+ --> $RUST/core/src/default.rs
+  |
+  | pub trait Default: Sized {
+  |                    ^^^^^ required by this bound in `Default`
+
+error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
+ --> tests/ui/args-flatten-non-args.rs:5:8
+  |
+5 | struct Cli1 {
+  |        ^^^^ this type is expected to have `derive(palc::Args)` but it is not
+  |
+  = help: within `Cli1State`, the trait `palc::__private::Args` is not implemented for `Deep`
+  = help: the following other types implement trait `palc::__private::Args`:
+            Cli1
+            Cli2
+note: required because it appears within the type `Cli1State`
+ --> tests/ui/args-flatten-non-args.rs:5:8
+  |
+5 | struct Cli1 {
+  |        ^^^^
+  = note: required for `Cli1State` to implement `Default`
+note: required by a bound in `ParserState`
+ --> src/runtime.rs
+  |
+  | pub trait ParserState: Default + ParserStateDyn {
+  |                        ^^^^^^^ required by this bound in `ParserState`
 
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
  --> tests/ui/args-flatten-non-args.rs:5:8
@@ -31,15 +75,59 @@ note: required by a bound in `palc::__private::Args::__State`
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Args::__State`
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
-  --> tests/ui/args-flatten-non-args.rs:15:11
+  --> tests/ui/args-flatten-non-args.rs:12:10
    |
-15 |     deep: Subcmd,
-   |           ^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
+12 | #[derive(palc::Args)]
+   |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
    |
    = help: the trait `palc::__private::Args` is not implemented for `Subcmd`
    = help: the following other types implement trait `palc::__private::Args`:
              Cli1
              Cli2
+   = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
+  --> tests/ui/args-flatten-non-args.rs:12:10
+   |
+12 | #[derive(palc::Args)]
+   |          ^^^^^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
+   |
+   = help: within `Cli2State`, the trait `palc::__private::Args` is not implemented for `Subcmd`
+   = help: the following other types implement trait `palc::__private::Args`:
+             Cli1
+             Cli2
+note: required because it appears within the type `Cli2State`
+  --> tests/ui/args-flatten-non-args.rs:13:8
+   |
+13 | struct Cli2 {
+   |        ^^^^
+note: required by a bound in `Default`
+  --> $RUST/core/src/default.rs
+   |
+   | pub trait Default: Sized {
+   |                    ^^^^^ required by this bound in `Default`
+
+error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
+  --> tests/ui/args-flatten-non-args.rs:13:8
+   |
+13 | struct Cli2 {
+   |        ^^^^ this type is expected to have `derive(palc::Args)` but it is not
+   |
+   = help: within `Cli2State`, the trait `palc::__private::Args` is not implemented for `Subcmd`
+   = help: the following other types implement trait `palc::__private::Args`:
+             Cli1
+             Cli2
+note: required because it appears within the type `Cli2State`
+  --> tests/ui/args-flatten-non-args.rs:13:8
+   |
+13 | struct Cli2 {
+   |        ^^^^
+   = note: required for `Cli2State` to implement `Default`
+note: required by a bound in `ParserState`
+  --> src/runtime.rs
+   |
+   | pub trait ParserState: Default + ParserStateDyn {
+   |                        ^^^^^^^ required by this bound in `ParserState`
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
   --> tests/ui/args-flatten-non-args.rs:13:8
@@ -78,7 +166,6 @@ note: required because it appears within the type `Cli1State`
 5 | struct Cli1 {
   |        ^^^^
   = note: the return type of a function must have a statically known size
-  = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
   --> tests/ui/args-flatten-non-args.rs:12:10
@@ -96,7 +183,17 @@ note: required because it appears within the type `Cli2State`
 13 | struct Cli2 {
    |        ^^^^
    = note: the return type of a function must have a statically known size
-   = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
+ --> tests/ui/args-flatten-non-args.rs:7:11
+  |
+7 |     deep: Deep,
+  |           ^^^^ this type is expected to have `derive(palc::Args)` but it is not
+  |
+  = help: the trait `palc::__private::Args` is not implemented for `Deep`
+  = help: the following other types implement trait `palc::__private::Args`:
+            Cli1
+            Cli2
 
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
  --> tests/ui/args-flatten-non-args.rs:4:10
@@ -108,7 +205,17 @@ error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
   = help: the following other types implement trait `palc::__private::Args`:
             Cli1
             Cli2
-  = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
+  --> tests/ui/args-flatten-non-args.rs:15:11
+   |
+15 |     deep: Subcmd,
+   |           ^^^^^^ this type is expected to have `derive(palc::Args)` but it is not
+   |
+   = help: the trait `palc::__private::Args` is not implemented for `Subcmd`
+   = help: the following other types implement trait `palc::__private::Args`:
+             Cli1
+             Cli2
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
   --> tests/ui/args-flatten-non-args.rs:12:10
@@ -120,4 +227,3 @@ error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`
    = help: the following other types implement trait `palc::__private::Args`:
              Cli1
              Cli2
-   = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)

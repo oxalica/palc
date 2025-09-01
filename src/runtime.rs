@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::ffi::{OsStr, OsString};
 use std::marker::PhantomData;
 use std::num::NonZero;
@@ -36,7 +35,13 @@ pub trait Args: Sized + 'static {
 }
 
 /// The fallback state type for graceful failing from proc-macro.
-pub struct FallbackState<T>(Infallible, PhantomData<T>);
+pub struct FallbackState<T>(PhantomData<T>);
+
+impl<T> Default for FallbackState<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
 
 impl<T: 'static> ParserState for FallbackState<T> {
     type Output = T;
@@ -46,11 +51,9 @@ impl<T: 'static> ParserState for FallbackState<T> {
     const TOTAL_ARG_CNT: u8 = 0;
     const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
 
-    fn init() -> Self {
-        unimplemented!()
-    }
     fn finish(&mut self) -> Result<Self::Output> {
-        match self.0 {}
+        // Never called at runtime.
+        unreachable!()
     }
 }
 impl<T: 'static> ParserStateDyn for FallbackState<T> {}
@@ -112,156 +115,269 @@ pub trait Parsable {
     ) -> Result<()>;
 }
 
-#[inline(always)]
-pub fn place_for_flag(place: &mut Option<bool>) -> &mut dyn Parsable {
-    #[derive(RefCast)]
-    #[repr(transparent)]
-    struct Place(Option<bool>);
+/// A state for parsing a field.
+pub trait FieldState: Default {
+    type Value;
+    type Output;
+    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable;
+    fn finish(&mut self) -> Self::Output;
+    fn finish_opt(&mut self) -> Option<Self::Output>;
+    fn is_set(&self) -> bool;
+    // NB. This is the default output value, i.e. the default type is `Vec<T>` for multi-args.
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output);
+    fn set_default_parse<P: ValueParser<Output = Self::Value>>(&mut self, default: &str, p: P) {
+        #[inline(never)]
+        fn set_from_default_dyn(p: &mut dyn Parsable, default: &OsStr) {
+            p.parse_from(
+                &mut RawParser::new(&mut std::iter::empty()),
+                ArgAttrs::new(),
+                default.as_ref(),
+                "".as_ref(),
+                &mut (),
+            )
+            .expect("invalid default value");
+        }
 
-    impl Parsable for Place {
-        fn parse_from(
-            &mut self,
-            _: &mut RawParser,
-            _: ArgAttrs,
-            _: &OsStr,
-            _: &OsStr,
-            _: &mut dyn ParserChain,
-        ) -> Result<()> {
-            if self.0.is_some() {
-                return Err(ErrorKind::DuplicatedNamedArgument.into());
-            }
-            self.0 = Some(true);
-            Ok(())
+        if !self.is_set() {
+            set_from_default_dyn(self.place(p), default.as_ref());
         }
     }
-
-    Place::ref_cast_mut(place)
 }
 
-#[inline(always)]
-pub fn place_for_counter(place: &mut Option<u8>) -> &mut dyn Parsable {
-    #[derive(RefCast)]
-    #[repr(transparent)]
-    struct Place(Option<u8>);
+#[derive(Default)]
+pub struct FlagPlace(Option<bool>);
 
-    impl Parsable for Place {
-        fn parse_from(
-            &mut self,
-            _: &mut RawParser,
-            _: ArgAttrs,
-            _: &OsStr,
-            _: &OsStr,
-            _: &mut dyn ParserChain,
-        ) -> Result<()> {
-            let v = self.0.get_or_insert_default();
-            *v = v.saturating_add(1);
-            Ok(())
+impl FieldState for FlagPlace {
+    type Value = bool;
+    type Output = bool;
+    fn place<P: ValueParser<Output = bool>>(&mut self, _: P) -> &mut dyn Parsable {
+        self
+    }
+    fn finish(&mut self) -> bool {
+        self.0.unwrap_or_default()
+    }
+    fn finish_opt(&mut self) -> Option<Self::Output> {
+        unreachable!()
+    }
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Value) {
+        self.0.get_or_insert_with(f);
+    }
+}
+impl Parsable for FlagPlace {
+    fn parse_from(
+        &mut self,
+        _: &mut RawParser,
+        _: ArgAttrs,
+        _: &OsStr,
+        _: &OsStr,
+        _: &mut dyn ParserChain,
+    ) -> Result<()> {
+        if self.0.is_some() {
+            return Err(ErrorKind::DuplicatedNamedArgument.into());
+        }
+        self.0 = Some(true);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct CounterPlace(u8);
+impl FieldState for CounterPlace {
+    type Output = u8;
+    type Value = u8;
+    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
+        self
+    }
+    fn finish(&mut self) -> u8 {
+        self.0
+    }
+    fn finish_opt(&mut self) -> Option<Self::Output> {
+        unreachable!()
+    }
+    fn is_set(&self) -> bool {
+        self.0 != 0
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Value) {
+        if self.0 == 0 {
+            self.0 = f();
         }
     }
-
-    Place::ref_cast_mut(place)
+}
+impl Parsable for CounterPlace {
+    fn parse_from(
+        &mut self,
+        _: &mut RawParser,
+        _: ArgAttrs,
+        _: &OsStr,
+        _: &OsStr,
+        _: &mut dyn ParserChain,
+    ) -> Result<()> {
+        self.0 = self.0.saturating_add(1);
+        Ok(())
+    }
 }
 
-pub fn place_for_vec<P: ValueParser>(
-    place: &mut Option<Vec<P::Output>>,
-    _: P,
-) -> &mut dyn Parsable {
-    #[derive(RefCast)]
-    #[repr(transparent)]
-    struct Place<P: ValueParser>(Option<Vec<P::Output>>);
+pub struct VecPlace<T>(Vec<T>);
+impl<T> Default for VecPlace<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+impl<T> FieldState for VecPlace<T> {
+    type Value = T;
+    type Output = Vec<T>;
+    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
+        <VecParser<P>>::ref_cast_mut(self)
+    }
+    fn finish(&mut self) -> Vec<T> {
+        std::mem::take(&mut self.0)
+    }
+    fn finish_opt(&mut self) -> Option<Vec<T>> {
+        if self.0.is_empty() { None } else { Some(self.finish()) }
+    }
+    fn is_set(&self) -> bool {
+        !self.0.is_empty()
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
+        if self.0.is_empty() {
+            self.0 = f();
+        }
+    }
+}
 
-    impl<P: ValueParser> Parsable for Place<P> {
-        fn parse_from(
-            &mut self,
-            p: &mut RawParser,
-            attrs: ArgAttrs,
-            value: &OsStr,
-            _: &OsStr,
-            _: &mut dyn ParserChain,
-        ) -> Result<()> {
-            let v = self.0.get_or_insert_default();
+#[derive(RefCast)]
+#[repr(transparent)]
+struct VecParser<P: ValueParser>(VecPlace<P::Output>);
+impl<P: ValueParser> Parsable for VecParser<P> {
+    fn parse_from(
+        &mut self,
+        p: &mut RawParser,
+        attrs: ArgAttrs,
+        value: &OsStr,
+        _: &OsStr,
+        _: &mut dyn ParserChain,
+    ) -> Result<()> {
+        let v = &mut self.0.0;
 
-            let feed: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.delimiter {
-                &mut move |value| {
-                    for frag in value.split(char::from(delim.get())) {
-                        v.push(P::parse(frag)?);
-                    }
-                    Ok(())
+        let feed: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.delimiter {
+            &mut move |value| {
+                for frag in value.split(char::from(delim.get())) {
+                    v.push(P::parse(frag)?);
                 }
-            } else {
-                &mut |value| {
-                    v.push(P::parse(value)?);
-                    Ok(())
-                }
-            };
-
-            feed(value)?;
-            if attrs.greedy {
-                for value in &mut p.iter {
-                    feed(&value)?;
-                }
+                Ok(())
             }
-            Ok(())
-        }
-    }
+        } else {
+            &mut |value| {
+                v.push(P::parse(value)?);
+                Ok(())
+            }
+        };
 
-    Place::<P>::ref_cast_mut(place)
+        feed(value)?;
+        if attrs.greedy {
+            for value in &mut p.iter {
+                feed(&value)?;
+            }
+        }
+        Ok(())
+    }
 }
 
-pub fn place_for_set_value<P: ValueParser>(
-    place: &mut Option<P::Output>,
-    _: P,
-) -> &'_ mut dyn Parsable {
-    #[derive(RefCast)]
-    #[repr(transparent)]
-    struct Place<P: ValueParser>(Option<P::Output>);
-
-    impl<P: ValueParser> Parsable for Place<P> {
-        fn parse_from(
-            &mut self,
-            _: &mut RawParser,
-            _: ArgAttrs,
-            value: &OsStr,
-            _: &OsStr,
-            _: &mut dyn ParserChain,
-        ) -> Result<()> {
-            if self.0.is_some() {
-                return Err(ErrorKind::DuplicatedNamedArgument.into());
-            }
-            self.0 = Some(P::parse(value)?);
-            Ok(())
-        }
+pub struct SetValuePlace<T>(Option<T>);
+impl<T> Default for SetValuePlace<T> {
+    fn default() -> Self {
+        Self(None)
     }
-
-    Place::<P>::ref_cast_mut(place)
+}
+impl<T> FieldState for SetValuePlace<T> {
+    type Value = T;
+    type Output = T;
+    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
+        <SetValueParser<P>>::ref_cast_mut(self)
+    }
+    fn finish(&mut self) -> T {
+        self.0.take().unwrap()
+    }
+    fn finish_opt(&mut self) -> Option<T> {
+        self.0.take()
+    }
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Value) {
+        self.0.get_or_insert_with(f);
+    }
 }
 
-pub fn place_for_set_opt_value<P: ValueParser>(
-    place: &mut Option<Option<P::Output>>,
-    _: P,
-) -> &'_ mut dyn Parsable {
-    #[derive(RefCast)]
-    #[repr(transparent)]
-    struct Place<P: ValueParser>(Option<Option<P::Output>>);
-
-    impl<P: ValueParser> Parsable for Place<P> {
-        fn parse_from(
-            &mut self,
-            _: &mut RawParser,
-            _: ArgAttrs,
-            value: &OsStr,
-            _: &OsStr,
-            _: &mut dyn ParserChain,
-        ) -> Result<()> {
-            if self.0.is_some() {
-                return Err(ErrorKind::DuplicatedNamedArgument.into());
-            }
-            self.0 = Some((!value.is_empty()).then(|| P::parse(value)).transpose()?);
-            Ok(())
+#[derive(RefCast)]
+#[repr(transparent)]
+struct SetValueParser<P: ValueParser>(SetValuePlace<P::Output>);
+impl<P: ValueParser> Parsable for SetValueParser<P> {
+    fn parse_from(
+        &mut self,
+        _: &mut RawParser,
+        _: ArgAttrs,
+        value: &OsStr,
+        _: &OsStr,
+        _: &mut dyn ParserChain,
+    ) -> Result<()> {
+        if self.0.0.is_some() {
+            return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
+        self.0.0 = Some(P::parse(value)?);
+        Ok(())
     }
+}
 
-    Place::<P>::ref_cast_mut(place)
+/// FIXME: This semantic is incorrect. It should accept `--foo` as `Some(None)`,
+/// not `--foo=`.
+pub struct SetOptionalValuePlace<T>(Option<Option<T>>);
+impl<T> Default for SetOptionalValuePlace<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+impl<T> FieldState for SetOptionalValuePlace<T> {
+    type Value = T;
+    type Output = Option<T>;
+    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
+        <SetOptionalValueParser<P>>::ref_cast_mut(self)
+    }
+    fn finish(&mut self) -> Option<T> {
+        unreachable!()
+    }
+    fn finish_opt(&mut self) -> Option<Option<T>> {
+        self.0.take()
+    }
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
+        self.0.get_or_insert_with(f);
+    }
+}
+
+#[derive(RefCast)]
+#[repr(transparent)]
+struct SetOptionalValueParser<P: ValueParser>(SetOptionalValuePlace<P::Output>);
+impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
+    fn parse_from(
+        &mut self,
+        _: &mut RawParser,
+        _: ArgAttrs,
+        value: &OsStr,
+        _: &OsStr,
+        _: &mut dyn ParserChain,
+    ) -> Result<()> {
+        if self.0.0.is_some() {
+            return Err(ErrorKind::DuplicatedNamedArgument.into());
+        }
+        self.0.0 = Some(if value.is_empty() { None } else { Some(P::parse(value)?) });
+        Ok(())
+    }
 }
 
 /// The singly linked list for states of ancestor subcommands. Deeper states come first.
@@ -338,7 +454,7 @@ pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn Parsable, ArgAttrs)>;
 
 pub type FeedUnnamed<'s> = FeedNamed<'s>;
 
-pub trait ParserState: ParserStateDyn {
+pub trait ParserState: Default + ParserStateDyn {
     type Output;
 
     const RAW_ARGS_INFO: &'static RawArgsInfo = RawArgsInfo::EMPTY_REF;
@@ -347,8 +463,6 @@ pub trait ParserState: ParserStateDyn {
 
     const TOTAL_ARG_CNT: u8 = 0;
     const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
-
-    fn init() -> Self;
 
     // Semantically this takes the ownership of `self`, but using `&mut self`
     // can eliminate partial drop codegen and call the default drop impl.
@@ -442,7 +556,7 @@ pub fn try_parse_state<S: ParserState>(
     cmd_name: &OsStr,
     ancestors: &mut dyn ParserChain,
 ) -> Result<S::Output> {
-    let mut state = S::init();
+    let mut state = S::default();
     let node = &mut ParserChainNode { cmd_name, state: &mut state, ancestors };
     try_parse_state_dyn(p, node)?;
     state.finish()

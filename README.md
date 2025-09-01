@@ -61,7 +61,8 @@ Though some of clap features are not-yet-implemented.
     - [x] `T where T: TryFrom<&OsStr> || TryFrom<&str> || FromStr` (named & unnamed)
     - [x] `bool` (named)
     - [x] `Option<T>` (named)
-    - [x] `Option<Option<T>>` (named)
+    - [ ] `Option<Option<T>>` (named)
+      FIXME: The semantic disagrees with clap yet.
     - [x] `Vec<T>` (named & unnamed)
     - [x] `Option<Vec<T>>` (named & unnamed)
     - [ ] `Vec<Vec<T>>`

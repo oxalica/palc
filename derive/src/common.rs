@@ -18,22 +18,19 @@ pub const TY_OPTION: &str = "Option";
 pub const TY_VEC: &str = "Vec";
 
 /// `TyCtor<ArgTy>` => `ArgTy`. `ty_ctor` must be a single-identifier path.
-pub fn strip_ty_ctor<'i>(mut ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
-    let ty = loop {
-        match ty {
-            Type::Group(inner) => ty = &inner.elem,
-            Type::Paren(inner) => ty = &inner.elem,
-            Type::Path(inner) => break inner,
-            _ => return None,
-        }
-    };
-    if ty.path.leading_colon.is_none() && ty.path.segments.len() == 1 {
-        let seg = &ty.path.segments[0];
-        if seg.ident == ty_ctor {
-            if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                if args.args.len() == 1 {
-                    if let GenericArgument::Type(arg_ty) = &args.args[0] {
-                        return Some(arg_ty);
+///
+/// This is matched literally and does NOT try to be smart, i.e.
+/// it does not recognize absolute paths or unwrap parenthesis.
+pub fn strip_ty_ctor<'i>(ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
+    if let Type::Path(syn::TypePath { qself: None, path }) = ty {
+        if path.leading_colon.is_none() && path.segments.len() == 1 {
+            let seg = &path.segments[0];
+            if seg.ident == ty_ctor {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if args.args.len() == 1 {
+                        if let GenericArgument::Type(arg_ty) = &args.args[0] {
+                            return Some(arg_ty);
+                        }
                     }
                 }
             }
@@ -48,46 +45,6 @@ pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
             use ::palc::__private as __rt;
             #tts
         };
-    }
-}
-
-pub enum ArgTyKind<'a> {
-    Bool,
-    U8,
-    Option(&'a Type),
-    OptionOption(&'a Type),
-    Vec(&'a Type),
-    OptionVec(&'a Type),
-    // TODO: VecVec, OptionVecVec
-    Other,
-}
-
-impl ArgTyKind<'_> {
-    pub fn of(ty: &syn::Type) -> ArgTyKind<'_> {
-        match ty {
-            Type::Path(p) if p.qself.is_none() => {
-                if p.path.is_ident(TY_BOOL) {
-                    return ArgTyKind::Bool;
-                }
-                if p.path.is_ident(TY_U8) {
-                    return ArgTyKind::U8;
-                }
-            }
-            _ => {}
-        }
-        if let Some(subty) = strip_ty_ctor(ty, TY_OPTION) {
-            if let Some(subty) = strip_ty_ctor(subty, TY_OPTION) {
-                return ArgTyKind::OptionOption(subty);
-            }
-            if let Some(subty) = strip_ty_ctor(subty, TY_VEC) {
-                return ArgTyKind::OptionVec(subty);
-            }
-            return ArgTyKind::Option(subty);
-        }
-        if let Some(subty) = strip_ty_ctor(ty, TY_VEC) {
-            return ArgTyKind::Vec(subty);
-        }
-        ArgTyKind::Other
     }
 }
 

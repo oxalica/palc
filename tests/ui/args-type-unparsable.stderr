@@ -31,18 +31,6 @@ note: required by a bound in `assert_auto_infer_value_parser_ok`
   |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
- --> tests/ui/args-type-unparsable.rs:1:10
-  |
-1 | #[derive(palc::Args)]
-  |          ^^^^^^^^^^ unparsable value type
-  |
-  = help: the trait `ValueParser` is not implemented for `MyType`
-  = note: this is an internal trait that should NOT be implemented directly
-  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
-              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-  = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: `MyType` cannot be parsed into a palc argument value
  --> tests/ui/args-type-unparsable.rs:3:17
   |
 3 |     positional: MyType,
@@ -89,18 +77,6 @@ note: required by a bound in `assert_auto_infer_value_parser_ok`
    |
    | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
    |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
-
-error[E0277]: `MyType` cannot be parsed into a palc argument value
-  --> tests/ui/args-type-unparsable.rs:12:10
-   |
-12 | #[derive(palc::Args)]
-   |          ^^^^^^^^^^ unparsable value type
-   |
-   = help: the trait `ValueParser` is not implemented for `MyType`
-   = note: this is an internal trait that should NOT be implemented directly
-   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
-               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-   = note: this error originates in the derive macro `palc::Args` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
   --> tests/ui/args-type-unparsable.rs:14:28
