@@ -10,6 +10,8 @@ mod derive_args;
 mod derive_parser;
 mod derive_subcommand;
 mod derive_value_enum;
+
+#[allow(unused, reason = "some functions are only used at runtime")]
 mod shared;
 
 #[proc_macro_derive(Parser, attributes(arg, command))]

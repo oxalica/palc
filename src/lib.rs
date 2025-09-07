@@ -57,7 +57,7 @@ pub mod __private {
     };
 
     pub use crate::refl::{RawArgsInfo, RawArgsInfoRef, RawSubcommandInfo};
-    pub use crate::shared::{AcceptHyphen, ArgAttrs};
+    pub use crate::shared::ArgAttrs;
     pub use crate::{Parser, Result};
 }
 

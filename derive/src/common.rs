@@ -1,4 +1,3 @@
-use std::num::NonZero;
 use std::ops;
 
 use proc_macro2::{Ident, Span, TokenStream};
@@ -10,7 +9,7 @@ use syn::{Attribute, GenericArgument, LitBool, LitChar, LitStr, PathArguments, T
 use syn::{Token, bracketed, token};
 
 use crate::error::try_syn;
-use crate::shared::{AcceptHyphen, ArgAttrs};
+use crate::shared::ArgAttrs;
 
 pub const TY_BOOL: &str = "bool";
 pub const TY_U8: &str = "u8";
@@ -612,43 +611,7 @@ impl ToTokens for Doc {
 
 impl ToTokens for ArgAttrs {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        if *self == Self::default() {
-            tokens.extend(quote! { __rt::ArgAttrs::new() });
-            return;
-        }
-
-        let Self {
-            no_value,
-            require_eq,
-            accept_hyphen,
-            delimiter,
-            global,
-            make_lowercase,
-            greedy,
-            index,
-        } = self;
-        let delimiter_u8 = delimiter.map_or(0, NonZero::get);
-        tokens.extend(quote! {
-            __rt::ArgAttrs {
-                no_value: #no_value,
-                require_eq: #require_eq,
-                accept_hyphen: #accept_hyphen,
-                delimiter: __rt::NonZero::new(#delimiter_u8),
-                global: #global,
-                make_lowercase: #make_lowercase,
-                greedy: #greedy,
-                index: #index,
-            }
-        });
-    }
-}
-
-impl ToTokens for AcceptHyphen {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.extend(match self {
-            AcceptHyphen::No => quote! { __rt::AcceptHyphen::No },
-            AcceptHyphen::NegativeNumber => quote! { __rt::AcceptHyphen::NegativeNumber },
-            AcceptHyphen::Yes => quote! { __rt::AcceptHyphen::Yes },
-        });
+        let val = self.0;
+        tokens.extend(quote! { __rt::ArgAttrs(#val) });
     }
 }

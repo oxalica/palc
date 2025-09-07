@@ -11,7 +11,7 @@ use crate::common::{
     TY_U8, TY_VEC, strip_ty_ctor, wrap_anon_item,
 };
 use crate::error::{Result, catch_errors};
-use crate::shared::{AcceptHyphen, ArgAttrs};
+use crate::shared::ArgAttrs;
 
 pub fn expand(input: &DeriveInput) -> TokenStream {
     assert_no_generics!(input);
@@ -104,7 +104,9 @@ impl ParserStateDefImpl<'_> {
             .chain(&mut self.named_fields)
             .zip(0..)
         {
-            f.attrs.index = i;
+            // Not set yet.
+            assert_eq!(f.attrs.get_index(), 0);
+            f.attrs.set(ArgAttrs::index(i), true);
         }
     }
 
@@ -396,9 +398,9 @@ pub fn expand_state_def_impl<'i>(
         };
 
         let accept_hyphen = match (arg.allow_hyphen_values, arg.allow_negative_numbers) {
-            (true, false) => AcceptHyphen::Yes,
-            (false, true) => AcceptHyphen::NegativeNumber,
-            (false, false) => AcceptHyphen::No,
+            (true, false) => ArgAttrs::ACCEPT_HYPHEN_ANY,
+            (false, true) => ArgAttrs::ACCEPT_HYPHEN_NUM,
+            (false, false) => ArgAttrs::default(),
             (true, true) => {
                 // TODO: More accurate spans.
                 emit_error!(
@@ -406,10 +408,10 @@ pub fn expand_state_def_impl<'i>(
                     "arg(allow_hyphen_values) and arg(allow_negative_numbers) \
                         conflict with each other",
                 );
-                AcceptHyphen::No
+                ArgAttrs::default()
             }
         };
-        if accept_hyphen != AcceptHyphen::No && kind.accepts_no_value() {
+        if accept_hyphen != ArgAttrs::default() && kind.accepts_no_value() {
             emit_error!(
                 ident,
                 "arg(allow_{{hyphen,negative}}_value) is incompatible with bool or u8",
@@ -423,6 +425,12 @@ pub fn expand_state_def_impl<'i>(
         if value_name.contains(|ch: char| ch.is_ascii_control()) {
             emit_error!(value_name, "arg(value_name) must NOT contain ASCII control characters");
         }
+
+        let mut attrs = ArgAttrs::delimiter(value_delimiter).union(accept_hyphen);
+        attrs.set(ArgAttrs::NO_VALUE, kind.accepts_no_value());
+        attrs.set(ArgAttrs::REQUIRE_EQ, arg.require_equals);
+        attrs.set(ArgAttrs::GLOBAL, arg.global);
+        attrs.set(ArgAttrs::MAKE_LOWERCASE, arg.ignore_case);
 
         if arg.is_named() {
             // Named arguments.
@@ -485,17 +493,6 @@ pub fn expand_state_def_impl<'i>(
                 buf
             };
 
-            let attrs = ArgAttrs {
-                no_value: kind.accepts_no_value(),
-                require_eq: arg.require_equals,
-                accept_hyphen,
-                delimiter: value_delimiter,
-                global: arg.global,
-                make_lowercase: arg.ignore_case,
-                greedy: false,
-                // To be filled later.
-                index: !0,
-            };
             out.direct_field_cnt += 1;
 
             out.named_fields.push(FieldInfo {
@@ -517,18 +514,16 @@ pub fn expand_state_def_impl<'i>(
         } else {
             // Unnamed arguments.
 
-            if arg.require_equals || arg.global {
-                emit_error!(ident, "arg(require_equals, global) only support named arguments");
-                continue;
-            }
-            if arg.ignore_case {
-                emit_error!(ident, "arg(ignore_case) only support named arguments");
+            if arg.require_equals || arg.global || arg.ignore_case {
+                emit_error!(
+                    ident,
+                    "arg(require_equals, global, ignore_case) only support named arguments"
+                );
             }
             if arg.default_value_t.is_some() {
                 emit_error!(ident, "TODO: arg(default_value_t) supports named arguments yet");
-                continue;
             }
-            if accept_hyphen != AcceptHyphen::No {
+            if accept_hyphen != ArgAttrs::default() {
                 emit_error!(
                     ident,
                     "arg(allow_hyphen_values) can only be used on \
@@ -545,19 +540,11 @@ pub fn expand_state_def_impl<'i>(
                 description.push_str("...");
             }
 
-            let attrs = ArgAttrs {
-                no_value: false,
-                require_eq: false,
-                accept_hyphen,
-                delimiter: value_delimiter,
-                global: false,
-                make_lowercase: false,
-                greedy: arg.trailing_var_arg,
-                // To be filled later.
-                index: !0,
-            };
+            // arg(last) implies greedy.
+            attrs.set(ArgAttrs::GREEDY, arg.trailing_var_arg | arg.last);
+
             out.direct_field_cnt += 1;
-            let mut info = FieldInfo {
+            let info = FieldInfo {
                 ident,
                 kind,
                 value_ty,
@@ -579,9 +566,6 @@ pub fn expand_state_def_impl<'i>(
                 if !is_variable_num {
                     emit_error!(ident, "TODO: arg(last) only supports Vec-like types yet");
                 }
-
-                // Last argument is after `--`, thus implicitly greedy.
-                info.attrs.greedy = true;
 
                 if let Some(prev) = &out.last_unnamed {
                     emit_error!(ident, "duplicated arg(last)");
@@ -669,7 +653,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
             });
         }
         for FieldInfo { value_ty, attrs, .. } in &self.named_fields {
-            if attrs.make_lowercase {
+            if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
                 asserts.extend(quote_spanned! {value_ty.span()=>
                     __rt::assert!(
                         <#value_ty as __rt::ValueEnum>::NO_UPPER_CASE,
@@ -754,6 +738,7 @@ impl ToTokens for FeedNamedImpl<'_> {
             })
             .collect::<TokenStream>();
 
+        // FIXME: This bloat generated code quadratically.
         let handle_else = {
             let direct_field_cnt = def.direct_field_cnt;
             let flatten_names = def.flatten_fields.iter().map(|f| f.ident);
@@ -767,7 +752,9 @@ impl ToTokens for FeedNamedImpl<'_> {
                 });
             quote! {
                 #(__rt::ParserStateDyn::feed_named(&mut self.#flatten_names, __name).map_break(|mut __ret| {
-                    __ret.1.index += #offsets;
+                    // FIXME: Add tests to ensure this overflow is caught at compile time.
+                    // NB: This relies on that `ArgAttrs::index` is at the lowest 8-bits.
+                    __ret.1.0 += const { #offsets } as ::std::primitive::u32;
                     __ret
                 })?;)*
             }
@@ -902,7 +889,7 @@ impl ToTokens for ValidationImpl<'_> {
 
         for f in def.direct_fields() {
             let ident = f.ident;
-            let idx = f.attrs.index;
+            let idx = f.attrs.get_index();
             if f.required {
                 tokens.extend(quote! {
                     if !__rt::FieldState::is_set(&self.#ident) {

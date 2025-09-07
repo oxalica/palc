@@ -9,7 +9,7 @@ use ref_cast::RefCast;
 use crate::Result;
 use crate::error::ErrorKind;
 use crate::refl::{RawArgsInfo, RawSubcommandInfo};
-use crate::shared::{AcceptHyphen, ArgAttrs};
+use crate::shared::ArgAttrs;
 use crate::values::ValueParser;
 
 use super::Error;
@@ -130,7 +130,7 @@ pub trait FieldState: Default {
         fn set_from_default_dyn(p: &mut dyn Parsable, default: &OsStr) {
             p.parse_from(
                 &mut RawParser::new(&mut std::iter::empty()),
-                ArgAttrs::new(),
+                ArgAttrs::default(),
                 default.as_ref(),
                 "".as_ref(),
                 &mut (),
@@ -262,7 +262,8 @@ impl<P: ValueParser> Parsable for VecParser<P> {
     ) -> Result<()> {
         let v = &mut self.0.0;
 
-        let feed: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.delimiter {
+        let feed: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.get_delimiter()
+        {
             &mut move |value| {
                 for frag in value.split(char::from(delim.get())) {
                     v.push(P::parse(frag)?);
@@ -277,7 +278,7 @@ impl<P: ValueParser> Parsable for VecParser<P> {
         };
 
         feed(value)?;
-        if attrs.greedy {
+        if attrs.contains(ArgAttrs::GREEDY) {
             for value in &mut p.iter {
                 feed(&value)?;
             }
@@ -403,7 +404,7 @@ impl dyn ParserChain + '_ {
         let Some(node) = self.out() else { return ControlFlow::Continue(()) };
         let info = node.state.info();
         if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name) {
-            if attrs.global {
+            if attrs.contains(ArgAttrs::GLOBAL) {
                 return ControlFlow::Break((place, attrs, info));
             }
         }
@@ -445,7 +446,7 @@ pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnam
         }
     }
 
-    ControlFlow::Break((Place::<G>::ref_cast_mut(state), /* unused */ ArgAttrs::new()))
+    ControlFlow::Break((Place::<G>::ref_cast_mut(state), /* unused */ ArgAttrs::default()))
 }
 
 /// `Break` on a resolved place. `Continue` on unknown names.
@@ -602,14 +603,14 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     }
                 };
 
-                if attrs.no_value {
+                if attrs.contains(ArgAttrs::NO_VALUE) {
                     // Only fail on long arguments with inlined values `--long=value`.
                     if let Some(v) = value.filter(|_| enc_name.len() > 1) {
                         Err(ErrorKind::UnexpectedInlineValue.with_input(v.into()))
                     } else {
                         place.parse_from(p, attrs, "".as_ref(), "".as_ref(), &mut ())
                     }
-                } else if attrs.require_eq && !has_eq {
+                } else if attrs.contains(ArgAttrs::REQUIRE_EQ) && !has_eq {
                     Err(ErrorKind::MissingEq.into())
                 } else if let Some(v) = value {
                     // Inlined value after `=`.
@@ -617,19 +618,19 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     place.parse_from(p, attrs, v, "".as_ref(), &mut ())
                 } else {
                     // Next argument as the value.
-                    p.next_value(attrs.accept_hyphen)
-                        .ok_or_else(|| ErrorKind::MissingValue.into())
-                        .and_then(|mut v| {
-                            if attrs.make_lowercase {
+                    p.next_value(attrs).ok_or_else(|| ErrorKind::MissingValue.into()).and_then(
+                        |mut v| {
+                            if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
                                 v.make_ascii_lowercase();
                             }
                             place.parse_from(p, attrs, &v, "".as_ref(), &mut ())
-                        })
+                        },
+                    )
                 }
                 .map_err(
                     #[cold]
                     |err| {
-                        let desc = args_info.get_description(attrs.index);
+                        let desc = args_info.get_description(attrs.get_index());
                         err.with_arg_desc(desc).maybe_render_help(chain)
                     },
                 )?;
@@ -765,17 +766,19 @@ impl<'i> RawParser<'i> {
         self.next_short_idx = None;
     }
 
-    fn next_value(&mut self, hyphen: AcceptHyphen) -> Option<OsString> {
+    fn next_value(&mut self, attrs: ArgAttrs) -> Option<OsString> {
         assert!(self.next_short_idx.is_none());
         self.iter.next().filter(|raw| {
             let raw = raw.as_encoded_bytes();
             if raw == b"-" || !raw.starts_with(b"-") {
                 return true;
             }
-            match hyphen {
-                AcceptHyphen::Yes => true,
-                AcceptHyphen::NegativeNumber => raw[1..].iter().all(|b| b.is_ascii_digit()),
-                AcceptHyphen::No => false,
+            if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_ANY) {
+                true
+            } else if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_NUM) {
+                raw[1..].iter().all(|b| b.is_ascii_digit())
+            } else {
+                false
             }
         })
     }
