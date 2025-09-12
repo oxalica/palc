@@ -26,6 +26,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
+          # UI test outputs can include std code, which is unavailable without rust-src.
+          # To make error messages consistent between CI and local tests, enable rust-src here.
+          components: ${{ matrix.rust == 'stable' && 'rust-src' || '' }}
       - name: Enable type layout randomization
         run: echo RUSTFLAGS=${RUSTFLAGS}\ -Zrandomize-layout >> $GITHUB_ENV
         if: matrix.rust == 'nightly'
