@@ -10,47 +10,78 @@ die() {
     exit 1
 }
 
+getRequiredFeatures() {
+    local name="$1"
+    if [[ "$name" = *clap* ]]; then
+        printf "%s" "--features clap "
+    fi
+    if [[ "$name" = *palc* ]]; then
+        printf "%s" "--features palc "
+    fi
+    if [[ "$name" = *argh* ]]; then
+        printf "%s" "--features argh "
+    fi
+}
+
 getSize() {
     local -a cmd
     local out
-    local example="$1"
+    local name="$1"
     shift
-    cmd=( cargo bloated --example "$example" --output sections --quiet "$@" -- --quiet )
+
+    local cmd=(
+        cargo bloated
+        --package test-suite
+        --bin "$name"
+        --output sections
+        --quiet \
+        $(getRequiredFeatures "$name")
+        "$@"
+        -- --quiet 
+    )
+
     out="$("${cmd[@]}")" || die "command fail: ${cmd[*]}"
     sed -nE 's/.*\s(\S+)\s+\(file\).*/\1/p' <<<"$out"
 }
 
-printf "%-20s %8s %8s\n" "Example" "default" "no-default-features"
+getCompileTime() {
+    local name="$1"
+    shift
 
-for example in simple-{clap,argh,palc,none} criterion-{clap,argh,palc} deno-{clap,palc}; do
-    if [[ "size-$example" != *"$filter"* ]]; then
+    local cmd=(
+        cargo build
+        --package test-suite
+        --bin "$name"
+        --quiet
+        $(getRequiredFeatures "$name")
+        "$@"
+    )
+    # %E: elapsed time.
+    CARGO_TARGET_DIR="$tmpdir" \
+        command time --format "%E" -- \
+        "${cmd[@]}" 2>&1 || die "failed to build"
+}
+
+
+tmpdir="$(mktemp -d /tmp/palc-target.XXXXXX)" || die "failed to mktemp"
+trap 'rm -r -- "$tmpdir"' EXIT
+
+# Prepare and download dependencies sources.
+cargo metadata --format-version 1 >/dev/null || die "failed to run cargo metadata"
+
+printf "%-20s %12s %12s %12s %12s\n" "name" "minimal" "default" "full-build" "incremental"
+
+for name in simple-{clap,argh,palc,none} criterion-{clap,argh,palc} deno-{clap,palc}; do
+    if [[ "$name" != *"$filter"* ]]; then
         continue
     fi
 
-    defaultSize="$(getSize $example)" || die
-    minSize="$(getSize $example --no-default-features)" || die
+    minSize="$(getSize $name)" || die
+    defaultSize="$(getSize $name --features full-featured)" || die
+    printf "%-20s %12s %12s" "$name" "$minSize" "$defaultSize"
 
-    printf "%-20s %8s %8s\n" "size-$example" "$defaultSize" "$minSize"
+    rm -rf "$tmpdir/debug"
+    buildTime="$(getCompileTime "$name" --features full-featured)" || die
+    incTime="$(getCompileTime "$name" --features full-featured)" || die
+    printf "%12s %12s\n" "$buildTime" "$incTime"
 done
-
-getCompileTime() {
-    CARGO_TARGET_DIR="$tmpdir" command time --format "%Uuser %Ssystem %Eelapsed" \
-        cargo build --package compile-bench --quiet "$@" 2>&1 || die "failed to build"
-}
-
-if [[ "comptime" = *"$filter"* ]]; then
-    echo
-    echo "Compile time"
-
-    tmpdir="$(mktemp -d /tmp/palc-target.XXXXXX)" || die "failed to mktemp"
-    trap 'rm -r -- "$tmpdir"' EXIT
-
-    # Prepare and download dependencies sources.
-    cargo metadata --format-version 1 >/dev/null || die "failed to run cargo metadata"
-
-    printf "comptime-default     "
-    getCompileTime || die
-    printf "comptime-incremental "
-    touch --no-create compile-bench/src/main.rs
-    getCompileTime || die
-fi

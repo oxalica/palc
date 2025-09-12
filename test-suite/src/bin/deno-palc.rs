@@ -1,6 +1,6 @@
 use palc::{Args, Parser, Subcommand, ValueEnum};
 
-#[path = "./util/deno.rs"]
+#[path = "./common/deno.rs"]
 mod cli;
 
 fn main() {
@@ -8,7 +8,7 @@ fn main() {
     std::hint::black_box(&cli);
 }
 
-#[cfg(feature = "help")]
+#[cfg(feature = "full-featured")]
 #[test]
 fn help() {
     let help = cli::Opt::render_long_help("me");
@@ -21,7 +21,7 @@ fn help() {
     // TODO: assert!(help.contains("ENVIRONMENT VARIABLES:"));
 }
 
-#[cfg(feature = "help")]
+#[cfg(feature = "full-featured")]
 #[test]
 fn help_subcommand() {
     let help = cli::Opt::try_parse_from(["me", "compile", "--help"]).err().unwrap().to_string();

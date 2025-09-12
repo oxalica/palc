@@ -1,6 +1,6 @@
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 
-#[path = "./util/criterion.rs"]
+#[path = "./common/simple.rs"]
 mod cli;
 
 fn main() {

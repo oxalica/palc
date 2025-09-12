@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-#[path = "./util/deno.rs"]
+#[path = "./common/deno.rs"]
 mod cli;
 
 fn main() {

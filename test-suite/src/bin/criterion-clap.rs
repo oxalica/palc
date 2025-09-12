@@ -1,7 +1,6 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
-#[allow(dead_code)]
-#[path = "./util/simple.rs"]
+#[path = "./common/criterion.rs"]
 mod cli;
 
 fn main() {

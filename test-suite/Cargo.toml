@@ -1,0 +1,75 @@
+[package]
+name = "test-suite"
+version = "0.1.0"
+edition = "2024"
+publish = false # Only for testing and benchmarking.
+
+[features]
+clap = ["dep:clap"]
+palc = ["dep:palc"]
+argh = ["dep:argh"]
+
+full-featured = [
+    "palc?/default",
+
+    # TODO: clap/default also includes `suggestions` and `color`, which are not supported by palc yet.
+    "clap?/error-context",
+    "clap?/help",
+    "clap?/std",
+    "clap?/usage",
+
+    "argh?/default"
+]
+
+[dependencies.palc]
+path = ".."
+default-features = false
+optional = true
+
+[dependencies.clap]
+version = "4"
+default-features = false
+features = ["std", "derive"]
+optional = true
+
+[dependencies.argh]
+version = "0.1"
+default-features = false
+optional = true
+
+[[bin]]
+name = "criterion-palc"
+required-features = ["palc"]
+
+[[bin]]
+name = "criterion-clap"
+required-features = ["clap"]
+
+[[bin]]
+name = "criterion-argh"
+required-features = ["argh"]
+
+[[bin]]
+name = "deno-palc"
+required-features = ["palc"]
+
+[[bin]]
+name = "deno-clap"
+required-features = ["clap"]
+
+# There is not deno-argh, because argh simply does not support that complex use case.
+
+[[bin]]
+name = "simple-palc"
+required-features = ["palc"]
+
+[[bin]]
+name = "simple-clap"
+required-features = ["clap"]
+
+[[bin]]
+name = "simple-argh"
+required-features = ["argh"]
+
+[[bin]]
+name = "simple-none"

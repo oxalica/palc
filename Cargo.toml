@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [".", "derive", "compile-bench"]
+members = [".", "derive", "test-suite"]
 
 [workspace.package]
 repository = "https://github.com/oxalica/palc"

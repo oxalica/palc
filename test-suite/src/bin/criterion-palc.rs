@@ -1,7 +1,7 @@
 use palc::{Parser, ValueEnum};
 
-#[allow(dead_code)]
-#[path = "./util/criterion.rs"]
+#[expect(dead_code, reason = "fields are unused and just for testing")]
+#[path = "./common/criterion.rs"]
 mod cli;
 
 fn main() {
@@ -9,7 +9,7 @@ fn main() {
     std::hint::black_box(&cli);
 }
 
-#[cfg(feature = "help")]
+#[cfg(feature = "full-featured")]
 #[test]
 fn help() {
     let help = cli::Cli::render_long_help("me");
