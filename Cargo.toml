@@ -6,7 +6,7 @@ members = [".", "derive", "compile-bench"]
 repository = "https://github.com/oxalica/palc"
 license = "MIT OR Apache-2.0"
 categories = ["command-line-interface"]
-keywords = ["argument", "cli", "arg", "argument", "clap"]
+keywords = ["argument", "cli", "arg", "parser", "clap"]
 edition = "2024"
 # NB. Sync with CI.
 rust-version = "1.87" # const <[_]>::copy_from_slice
