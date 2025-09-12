@@ -226,19 +226,6 @@ fn default_values() {
 }
 
 #[test]
-fn counter() {
-    #[derive(Debug, Clone, Default, PartialEq, Parser)]
-    struct Cli {
-        #[arg(long, short)]
-        verbose: u8,
-    }
-
-    check([""], &Cli { verbose: 0 });
-    check(["", "-vv"], &Cli { verbose: 2 });
-    check(["", "--verbose", "-vv", "--verbose"], &Cli { verbose: 4 });
-}
-
-#[test]
 fn flatten() {
     #[derive(Debug, PartialEq, Parser)]
     struct Cli {
@@ -479,7 +466,10 @@ fn trailing_args() {
         ["", "-d", "1", "a", "-d", "-1"],
         &No { debug: 1, any: vec!["a".into(), "-d".into(), "-1".into()] },
     );
-    check_err::<No>(["", "-d", "-1"], expect!["a value is required for '-d <DEBUG>' but none was supplied"]);
+    check_err::<No>(
+        ["", "-d", "-1"],
+        expect!["a value is required for '-d <DEBUG>' but none was supplied"],
+    );
     check_err::<No>(["", "-x"], expect!["unexpected argument '-x'"]);
 
     check(["", "-d", "-1"], &Yes { any: vec![], debug: -1 });
@@ -511,7 +501,7 @@ fn constraint() {
         #[arg(short, required = true)]
         force: bool,
         #[arg(short, required = true)]
-        verbose: u8,
+        level: Option<u8>,
     }
 
     check_err::<Required>([""], expect!["the argument '<FILES>...' is required but not provided"]);
@@ -525,12 +515,17 @@ fn constraint() {
     );
     check_err::<Required>(
         ["", "--key=foo", "path", "-f"],
-        expect!["the argument '-v' is required but not provided"],
+        expect!["the argument '-l <LEVEL>' is required but not provided"],
     );
 
     check(
-        ["", "--key=foo", "path", "-fvv"],
-        &Required { key: vec!["foo".into()], files: vec!["path".into()], force: true, verbose: 2 },
+        ["", "--key=foo", "path", "-fl2"],
+        &Required {
+            key: vec!["foo".into()],
+            files: vec!["path".into()],
+            force: true,
+            level: Some(2),
+        },
     )
 }
 

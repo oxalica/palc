@@ -183,43 +183,6 @@ impl Parsable for FlagPlace {
     }
 }
 
-#[derive(Default)]
-pub struct CounterPlace(u8);
-impl FieldState for CounterPlace {
-    type Output = u8;
-    type Value = u8;
-    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
-        self
-    }
-    fn finish(&mut self) -> u8 {
-        self.0
-    }
-    fn finish_opt(&mut self) -> Option<Self::Output> {
-        unreachable!()
-    }
-    fn is_set(&self) -> bool {
-        self.0 != 0
-    }
-    fn set_default(&mut self, f: impl FnOnce() -> Self::Value) {
-        if self.0 == 0 {
-            self.0 = f();
-        }
-    }
-}
-impl Parsable for CounterPlace {
-    fn parse_from(
-        &mut self,
-        _: &mut RawParser,
-        _: ArgAttrs,
-        _: &OsStr,
-        _: &OsStr,
-        _: &mut dyn ParserChain,
-    ) -> Result<()> {
-        self.0 = self.0.saturating_add(1);
-        Ok(())
-    }
-}
-
 pub struct VecPlace<T>(Vec<T>);
 impl<T> Default for VecPlace<T> {
     fn default() -> Self {

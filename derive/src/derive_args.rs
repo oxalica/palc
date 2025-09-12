@@ -8,7 +8,7 @@ use syn::{Data, DeriveInput, Fields, FieldsNamed, Ident, LitChar, LitStr, Visibi
 
 use crate::common::{
     ArgOrCommand, ArgsCommandMeta, CommandMeta, Doc, FieldPath, Override, TY_BOOL, TY_OPTION,
-    TY_U8, TY_VEC, strip_ty_ctor, wrap_anon_item,
+    TY_VEC, strip_ty_ctor, wrap_anon_item,
 };
 use crate::error::{Result, catch_errors};
 use crate::shared::ArgAttrs;
@@ -161,7 +161,6 @@ enum DefaultValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MagicKind {
     Bool,
-    U8,
     Value,
     Option,
     OptionOption,
@@ -176,8 +175,6 @@ impl MagicKind {
         };
         if path.is_ident(TY_BOOL) {
             (MagicKind::Bool, ty)
-        } else if path.is_ident(TY_U8) {
-            (MagicKind::U8, ty)
         } else if let Some(ty) = strip_ty_ctor(ty, TY_OPTION) {
             if let Some(ty) = strip_ty_ctor(ty, TY_OPTION) {
                 (MagicKind::OptionOption, ty)
@@ -194,7 +191,7 @@ impl MagicKind {
     }
 
     fn accepts_no_value(self) -> bool {
-        matches!(self, Self::Bool | Self::U8)
+        matches!(self, Self::Bool)
     }
 
     fn accepts_multiple_values(self) -> bool {
@@ -204,7 +201,6 @@ impl MagicKind {
     fn place_ty(self, value_ty: &syn::Type) -> TokenStream {
         match self {
             MagicKind::Bool => quote! { __rt::FlagPlace },
-            MagicKind::U8 => quote! { __rt::CounterPlace },
             MagicKind::Value | MagicKind::Option => quote! { __rt::SetValuePlace<#value_ty> },
             MagicKind::OptionOption => quote! { __rt::SetOptionalValuePlace<#value_ty> },
             MagicKind::Vec | MagicKind::OptionVec => quote! { __rt::VecPlace<#value_ty> },
@@ -213,7 +209,7 @@ impl MagicKind {
 
     fn finalizer(self) -> TokenStream {
         match self {
-            MagicKind::Bool | MagicKind::U8 | MagicKind::Vec | MagicKind::Value => {
+            MagicKind::Bool | MagicKind::Vec | MagicKind::Value => {
                 quote! { finish }
             }
             MagicKind::Option | MagicKind::OptionOption | MagicKind::OptionVec => {

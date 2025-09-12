@@ -12,7 +12,6 @@ use crate::error::try_syn;
 use crate::shared::ArgAttrs;
 
 pub const TY_BOOL: &str = "bool";
-pub const TY_U8: &str = "u8";
 pub const TY_OPTION: &str = "Option";
 pub const TY_VEC: &str = "Vec";
 
