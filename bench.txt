@@ -1,21 +1,19 @@
 # Runs on AMD Ryzen 7 5700G, x86_64-linux. Your result may vary.
-# Commit: 4faadea2fabf59bdb1ac416a13258db45a2e322d
+# Commit: 3da6f23f3b5d525f037b3da1128c26c07e706f26
 
-# FIXME: Results of no-default-features are only meaningful with *-palc,
-# clap&argh always have default features enabled, because we cannot fine-control
-# features of dev-dependencies.
+# Note 1: "full-build" and "incremental" columns are using "dev" profile.
+# Note 2: Keep in mind that argh supports much fewer features than palc and clap.
+#    Their numbers cannot be compared directly.
+# Note 3: "default" column for "*-clap" have "suggestions" and "color" disabled,
+#     because palc does not support them yet.
 
-Example               default no-default-features
-size-simple-clap       463KiB   463KiB
-size-simple-argh      40.3KiB  40.3KiB
-size-simple-palc      35.1KiB  26.1KiB
-size-simple-none      9.36KiB  9.36KiB
-size-criterion-clap    610KiB   610KiB
-size-criterion-argh   55.6KiB  55.6KiB
-size-criterion-palc   51.9KiB  41.0KiB
-size-deno-clap         697KiB   697KiB
-size-deno-palc         116KiB  90.3KiB
-
-Compile time
-comptime-default     3.25user 1.10system 0:02.43elapsed
-comptime-incremental 0.07user 0.08system 0:00.12elapsed
+name                      minimal      default   full-build  incremental
+simple-clap                309KiB       460KiB     0:03.03      0:00.03
+simple-argh               38.8KiB      40.4KiB     0:04.26      0:00.03
+simple-palc               25.7KiB      33.3KiB     0:02.43      0:00.03
+simple-none               8.86KiB      8.86KiB     0:00.12      0:00.03
+criterion-clap             441KiB       595KiB     0:03.10      0:00.03
+criterion-argh            52.0KiB      58.2KiB     0:04.28      0:00.03
+criterion-palc            46.0KiB      63.8KiB     0:02.50      0:00.03
+deno-clap                  536KiB       685KiB     0:03.21      0:00.04
+deno-palc                 82.6KiB       116KiB     0:02.65      0:00.03
