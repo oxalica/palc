@@ -8,7 +8,7 @@ Prototype of a command line argument parser with several opposite design goals f
 > ⚠️ This project is in alpha stage and is not ready for production yet.
 > The API is subject to change. Feedbacks are welcome.
 
-Check [`./examples/*-palc.rs`](./examples) for usages.
+Check [`./test-suite/src/bin/*-palc.rs`](https://github.com/oxalica/palc/blob/main/test-suite/src/bin/criterion-palc.rs) for example usages.
 
 [clap]: https://github.com/clap-rs/clap
 

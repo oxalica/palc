@@ -57,7 +57,7 @@ required-features = ["palc"]
 name = "deno-clap"
 required-features = ["clap"]
 
-# There is not deno-argh, because argh simply does not support that complex use case.
+# There is no "deno-argh", because argh simply does not support that complex use case.
 
 [[bin]]
 name = "simple-palc"
