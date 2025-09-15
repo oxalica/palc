@@ -1,3 +1,6 @@
+//! This is the proc-macro crate of `palc`.
+//!
+//! See [documentations of `palc`](https://docs.rs/palc).
 #![forbid(unsafe_code)]
 use proc_macro::TokenStream;
 use syn::DeriveInput;
