@@ -1,6 +1,6 @@
 [package]
 name = "palc-derive"
-version = "0.0.1"
+version = "0.0.2"
 description = "Derive macros for palc. Use the re-exports from palc intead."
 readme = false
 edition.workspace = true

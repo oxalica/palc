@@ -13,7 +13,7 @@ rust-version = "1.87" # const <[_]>::copy_from_slice
 
 [package]
 name = "palc"
-version = "0.0.1"
+version = "0.0.2"
 description = "WIP: Command Line Argument Parser with several opposite design goal from Clap"
 exclude = ["*.sh"] # Shortcut scripts.
 edition.workspace = true
@@ -29,7 +29,7 @@ help = []
 
 [dependencies]
 os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_os_str"] }
-palc-derive = { path = "./derive", version = "=0.0.1" }
+palc-derive = { path = "./derive", version = "=0.0.2" }
 ref-cast = "1.0.24"
 
 [dev-dependencies]
