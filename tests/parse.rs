@@ -51,6 +51,31 @@ fn short() {
 }
 
 #[test]
+fn flag() {
+    #[derive(Debug, PartialEq, Parser)]
+    struct Cli {
+        #[arg(short, long)]
+        verbose: bool,
+    }
+
+    check(["", "--verbose"], &Cli { verbose: true });
+    check(["", "-v"], &Cli { verbose: true });
+
+    check_err::<Cli>(
+        ["", "-vv"],
+        expect!["the argument '-v, --verbose' cannot be used multiple times"],
+    );
+    check_err::<Cli>(
+        ["", "--verbose", "-v"],
+        expect!["the argument '-v, --verbose' cannot be used multiple times"],
+    );
+
+    check_err::<Cli>(["", "--verbose="], expect!["unexpected value for '-v, --verbose'"]);
+    check_err::<Cli>(["", "-vd"], expect!["unexpected argument '-d'"]);
+    check_err::<Cli>(["", "-v="], expect!["unexpected value for '-v, --verbose'"]);
+}
+
+#[test]
 fn require_equals() {
     #[derive(Debug, PartialEq, Parser)]
     struct Cli {
@@ -184,24 +209,24 @@ fn option_option() {
     struct Cli {
         #[arg(long)]
         foo: Option<String>,
-        #[arg(long)]
+        #[arg(long, require_equals = true)]
         bar: Option<Option<String>>,
     }
 
     check([""], &Cli { foo: None, bar: None });
-    check(["", "--foo=", "--bar="], &Cli { foo: Some("".into()), bar: Some(None) });
+    check(["", "--foo=", "--bar="], &Cli { foo: Some("".into()), bar: Some(Some("".into())) });
     check(["", "--foo=a", "--bar=b"], &Cli { foo: Some("a".into()), bar: Some(Some("b".into())) });
 
-    // They both expect a value, even if an empty one. Or it will fail.
-    // This behavior matches clap.
+    // `Option<T>` makes the argument itself optional, but the value is required.
     check_err::<Cli>(
         ["", "--foo"],
         expect!["a value is required for '--foo <FOO>' but none was supplied"],
     );
-    check_err::<Cli>(
-        ["", "--bar"],
-        expect!["a value is required for '--bar <BAR>' but none was supplied"],
-    );
+
+    // `Option<Option<T>>` makes the argument and its value both optional.
+    check(["", "--bar"], &Cli { foo: None, bar: Some(None) });
+    // It never consume the next argument.
+    check_err::<Cli>(["", "--bar", "value"], expect!["unexpected argument 'value'"]);
 }
 
 #[test]

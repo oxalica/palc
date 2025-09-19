@@ -190,12 +190,18 @@ impl MagicKind {
         }
     }
 
-    fn accepts_no_value(self) -> bool {
-        matches!(self, Self::Bool)
+    fn require_value(self) -> bool {
+        match self {
+            Self::Value | Self::Option | Self::Vec | Self::OptionVec => true,
+            Self::Bool | Self::OptionOption => false,
+        }
     }
 
     fn accepts_multiple_values(self) -> bool {
-        matches!(self, Self::Vec | Self::OptionVec)
+        match self {
+            Self::Vec | Self::OptionVec => true,
+            Self::Bool | Self::Value | Self::Option | Self::OptionOption => false,
+        }
     }
 
     fn place_ty(self, value_ty: &syn::Type) -> TokenStream {
@@ -407,10 +413,11 @@ pub fn expand_state_def_impl<'i>(
                 ArgAttrs::default()
             }
         };
-        if accept_hyphen != ArgAttrs::default() && kind.accepts_no_value() {
+        if accept_hyphen != ArgAttrs::default() && (!kind.require_value() || arg.require_equals) {
             emit_error!(
                 ident,
-                "arg(allow_{{hyphen,negative}}_value) is incompatible with bool or u8",
+                "arg(allow_{{hyphen,negative}}_value) is incompatible with argument that \
+                takes no value or has `requires_equals` set",
             );
         }
 
@@ -419,11 +426,19 @@ pub fn expand_state_def_impl<'i>(
             None => heck::AsShoutySnekCase(&ident_str).to_string(),
         };
         if value_name.contains(|ch: char| ch.is_ascii_control()) {
-            emit_error!(value_name, "arg(value_name) must NOT contain ASCII control characters");
+            emit_error!(ident, "arg(value_name) must NOT contain ASCII control characters");
+        }
+
+        if kind == MagicKind::OptionOption && !arg.require_equals {
+            emit_error!(
+                ident,
+                "magic type `Option<Option<_>>` requires `requires_equals = true` to avoid ambiguity, \
+                see <https://github.com/clap-rs/clap/issues/3030>",
+            );
         }
 
         let mut attrs = ArgAttrs::delimiter(value_delimiter).union(accept_hyphen);
-        attrs.set(ArgAttrs::NO_VALUE, kind.accepts_no_value());
+        attrs.set(ArgAttrs::REQUIRE_VALUE, kind.require_value());
         attrs.set(ArgAttrs::REQUIRE_EQ, arg.require_equals);
         attrs.set(ArgAttrs::GLOBAL, arg.global);
         attrs.set(ArgAttrs::MAKE_LOWERCASE, arg.ignore_case);
@@ -482,7 +497,9 @@ pub fn expand_state_def_impl<'i>(
                     (Some(short), _) => format!("-{short}"),
                     (None, None) => unreachable!(),
                 };
-                if !kind.accepts_no_value() {
+                if kind == MagicKind::OptionOption {
+                    write!(buf, "[=<{value_name}>]").unwrap();
+                } else if kind.require_value() {
                     write!(buf, "{}<{}>", if arg.require_equals { '=' } else { ' ' }, value_name)
                         .unwrap();
                 }

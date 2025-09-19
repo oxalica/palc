@@ -61,8 +61,10 @@ Though some of clap features are not-yet-implemented.
     - [x] `T where T: TryFrom<&OsStr> || TryFrom<&str> || FromStr` (named & unnamed)
     - [x] `bool` (named)
     - [x] `Option<T>` (named)
-    - [ ] `Option<Option<T>>` (named)
-      FIXME: The semantic disagrees with clap yet.
+    - [x] `Option<Option<T>>` (named)
+      Optional argument with an optional value, eg. `--foo`, `--foo=bar` or nothing.
+      It requires `require_equals = true` to avoid parsing ambiguity and confusion.
+      See: <https://github.com/clap-rs/clap/issues/3030>
     - [x] `Vec<T>` (named & unnamed)
     - [x] `Option<Vec<T>>` (named & unnamed)
     - [ ] `Vec<Vec<T>>`

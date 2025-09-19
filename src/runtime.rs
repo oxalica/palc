@@ -144,8 +144,11 @@ pub trait FieldState: Default {
     }
 }
 
+/// A value-less named argument, so-called flag.
+///
+/// `--flag` set the state to `true`. Multiple occurrences are rejected.
 #[derive(Default)]
-pub struct FlagPlace(Option<bool>);
+pub struct FlagPlace(bool);
 
 impl FieldState for FlagPlace {
     type Value = bool;
@@ -154,35 +157,43 @@ impl FieldState for FlagPlace {
         self
     }
     fn finish(&mut self) -> bool {
-        self.0.unwrap_or_default()
+        self.0
     }
     fn finish_opt(&mut self) -> Option<Self::Output> {
         unreachable!()
     }
     fn is_set(&self) -> bool {
-        self.0.is_some()
+        self.0
     }
     fn set_default(&mut self, f: impl FnOnce() -> Self::Value) {
-        self.0.get_or_insert_with(f);
+        if !self.0 {
+            self.0 = f();
+        }
     }
 }
 impl Parsable for FlagPlace {
     fn parse_from(
         &mut self,
         _: &mut RawParser,
-        _: ArgAttrs,
+        attrs: ArgAttrs,
         _: &OsStr,
         _: &OsStr,
         _: &mut dyn ParserChain,
     ) -> Result<()> {
-        if self.0.is_some() {
+        if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
+            return Err(ErrorKind::UnexpectedInlineValue.into());
+        }
+        if self.0 {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
-        self.0 = Some(true);
+        self.0 = true;
         Ok(())
     }
 }
 
+/// A multi-occurring named argument or a variable length unnamed argument,
+/// that collects all the values into a `Vec`.
+/// Multiple occurrences can be interleaved by other arguments.
 pub struct VecPlace<T>(Vec<T>);
 impl<T> Default for VecPlace<T> {
     fn default() -> Self {
@@ -250,6 +261,9 @@ impl<P: ValueParser> Parsable for VecParser<P> {
     }
 }
 
+/// A single-occurring single-value named or unnamed argument.
+///
+/// Multiple occurrences produce a duplicated argument error.
 pub struct SetValuePlace<T>(Option<T>);
 impl<T> Default for SetValuePlace<T> {
     fn default() -> Self {
@@ -296,8 +310,12 @@ impl<P: ValueParser> Parsable for SetValueParser<P> {
     }
 }
 
-/// FIXME: This semantic is incorrect. It should accept `--foo` as `Some(None)`,
-/// not `--foo=`.
+/// A single-occurring zero-or-one value named argument.
+///
+/// Currently it must have `requires_eq` set, and accepts either:
+/// - Missing argument => `None`
+/// - `--foo` => `Some(None)`
+/// - `--foo=value` => `Some(Some(..))`
 pub struct SetOptionalValuePlace<T>(Option<Option<T>>);
 impl<T> Default for SetOptionalValuePlace<T> {
     fn default() -> Self {
@@ -331,7 +349,7 @@ impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
     fn parse_from(
         &mut self,
         _: &mut RawParser,
-        _: ArgAttrs,
+        attrs: ArgAttrs,
         value: &OsStr,
         _: &OsStr,
         _: &mut dyn ParserChain,
@@ -339,7 +357,11 @@ impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
         if self.0.0.is_some() {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
-        self.0.0 = Some(if value.is_empty() { None } else { Some(P::parse(value)?) });
+        self.0.0 = Some(if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
+            Some(P::parse(value)?)
+        } else {
+            None
+        });
         Ok(())
     }
 }
@@ -535,9 +557,9 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
 
     while let Some(arg) = p.next_arg(&mut buf)? {
         match arg {
-            Arg::EncodedNamed(enc_name, has_eq, value) => {
+            RawArg::EncodedNamed(enc_name, inline_value) => {
                 let args_info = chain.state.info();
-                let (place, attrs, args_info) = match chain.state.feed_named(enc_name) {
+                let (place, mut attrs, args_info) = match chain.state.feed_named(enc_name) {
                     ControlFlow::Break((place, attrs)) => (place, attrs, args_info),
                     ControlFlow::Continue(()) => {
                         match chain.ancestors.feed_global_named(enc_name) {
@@ -566,39 +588,58 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     }
                 };
 
-                if attrs.contains(ArgAttrs::NO_VALUE) {
-                    // Only fail on long arguments with inlined values `--long=value`.
-                    if let Some(v) = value.filter(|_| enc_name.len() > 1) {
-                        Err(ErrorKind::UnexpectedInlineValue.with_input(v.into()))
-                    } else {
-                        place.parse_from(p, attrs, "".as_ref(), "".as_ref(), &mut ())
+                let require_value = attrs.contains(ArgAttrs::REQUIRE_VALUE);
+                let require_eq = attrs.contains(ArgAttrs::REQUIRE_EQ);
+                // FIXME: Eliminate this clone.
+                let value_ret = match inline_value {
+                    RawInlineValue::Eq(v) => {
+                        attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
+                        Ok(v.to_owned())
                     }
-                } else if attrs.contains(ArgAttrs::REQUIRE_EQ) && !has_eq {
-                    Err(ErrorKind::MissingEq.into())
-                } else if let Some(v) = value {
-                    // Inlined value after `=`.
-                    p.discard_short_args();
-                    place.parse_from(p, attrs, v, "".as_ref(), &mut ())
-                } else {
-                    // Next argument as the value.
-                    p.next_value(attrs).ok_or_else(|| ErrorKind::MissingValue.into()).and_then(
-                        |mut v| {
-                            if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
-                                v.make_ascii_lowercase();
-                            }
-                            place.parse_from(p, attrs, &v, "".as_ref(), &mut ())
+                    RawInlineValue::None => {
+                        // NB: On `Option<Option<_>>` case (`!require_value && require_eq`),
+                        // we should accept standalone long arguments `--foo` as missing value.
+                        // Thus `require_value` checks first.
+                        if !require_value {
+                            Ok(OsString::new())
+                        } else if require_eq {
+                            Err(ErrorKind::MissingEq.into())
+                        } else {
+                            p.next_arg_as_value(attrs)
+                        }
+                    }
+                    RawInlineValue::Ambiguous(tail) => {
+                        // NB: On `Option<Option<_>>` case (`!require_value && require_eq`),
+                        // we should reject bundled arguments `-svalue` since `=` is required.
+                        // Thus `require_eq` checks first.
+                        if require_eq {
+                            Err(ErrorKind::MissingEq.into())
+                        } else if require_value {
+                            p.discard_short_args();
+                            attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
+                            Ok(tail.to_owned())
+                        } else {
+                            Ok(OsString::new())
+                        }
+                    }
+                };
+
+                value_ret
+                    .and_then(|mut value| {
+                        if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
+                            value.make_ascii_lowercase();
+                        }
+                        place.parse_from(p, attrs, &value, "".as_ref(), &mut ())
+                    })
+                    .map_err(
+                        #[cold]
+                        |err| {
+                            let desc = args_info.get_description(attrs.get_index());
+                            err.with_arg_desc(desc).maybe_render_help(chain)
                         },
-                    )
-                }
-                .map_err(
-                    #[cold]
-                    |err| {
-                        let desc = args_info.get_description(attrs.get_index());
-                        err.with_arg_desc(desc).maybe_render_help(chain)
-                    },
-                )?;
+                    )?;
             }
-            Arg::Unnamed(arg) => match chain.state.feed_unnamed(&arg, unnamed_idx, false) {
+            RawArg::Unnamed(arg) => match chain.state.feed_unnamed(&arg, unnamed_idx, false) {
                 ControlFlow::Break((place, attrs)) => {
                     unnamed_idx += 1;
                     place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
@@ -607,7 +648,7 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
                 }
             },
-            Arg::DashDash => {
+            RawArg::DashDash => {
                 drop(arg);
                 drop(buf);
                 while let Some(arg) = p.iter.next() {
@@ -635,17 +676,23 @@ pub struct RawParser<'i> {
 }
 
 #[derive(Debug)]
-enum Arg<'a> {
+enum RawArg<'a> {
     /// "--"
     DashDash,
-    /// Encoded arg name, equal sign, and an inlined value (excluding `=`).
-    ///
-    /// - "--long" => ("long", None)
-    /// - "--long=value" => ("long", Some("value"))
-    /// - "-s" => ("s", None)
-    /// - "-smore", "-s=more" => ("s", Some("more"))
-    EncodedNamed(&'a str, bool, Option<&'a OsStr>),
+    /// Encoded arg name and an optional inline value.
+    EncodedNamed(&'a str, RawInlineValue<'a>),
     Unnamed(OsString),
+}
+
+#[derive(Debug)]
+enum RawInlineValue<'a> {
+    /// No inline value given: `--long`, `-s`.
+    None,
+    /// Explicit inline value given: `--long=value`, `-s=value`.
+    Eq(&'a OsStr),
+    /// Ambiguous trailing chars that can be a inline value or bundled arguments:
+    /// `-svalue`.
+    Ambiguous(&'a OsStr),
 }
 
 impl<'i> RawParser<'i> {
@@ -654,7 +701,7 @@ impl<'i> RawParser<'i> {
     }
 
     /// Iterate the next logical argument, possibly splitting short argument bundle.
-    fn next_arg<'b>(&mut self, buf: &'b mut OsString) -> Result<Option<Arg<'b>>> {
+    fn next_arg<'b>(&mut self, buf: &'b mut OsString) -> Result<Option<RawArg<'b>>> {
         #[cold]
         fn fail_on_next_short_arg(rest: &OsStr) -> Error {
             let bytes = rest.as_encoded_bytes();
@@ -681,16 +728,20 @@ impl<'i> RawParser<'i> {
             let short_arg = next_byte.map_err(|_| fail_on_next_short_arg(buf.index(idx..)))?;
 
             self.next_short_idx = pos.checked_add(1);
-            let (has_eq, value) = match argb.get(idx + 1) {
-                Some(&b'=') => (true, Some(buf.index(idx + 2..))),
-                Some(_) => (false, Some(buf.index(idx + 1..))),
+            let inline_value = match argb.get(idx + 1) {
+                Some(&b'=') => {
+                    // `=` must be consumed as a inlined value, not a short argument.
+                    self.discard_short_args();
+                    RawInlineValue::Eq(buf.index(idx + 2..))
+                }
+                Some(_) => RawInlineValue::Ambiguous(buf.index(idx + 1..)),
                 None => {
                     // Reached the end of bundle.
                     self.discard_short_args();
-                    (false, None)
+                    RawInlineValue::None
                 }
             };
-            return Ok(Some(Arg::EncodedNamed(short_arg, has_eq, value)));
+            return Ok(Some(RawArg::EncodedNamed(short_arg, inline_value)));
         }
         self.next_short_idx = None;
 
@@ -702,25 +753,25 @@ impl<'i> RawParser<'i> {
 
         if buf.starts_with("--") {
             if buf.len() == 2 {
-                return Ok(Some(Arg::DashDash));
+                return Ok(Some(RawArg::DashDash));
             }
             // Using `strip_prefix` in if-condition requires polonius to make lifetime check.
             let rest = buf.index(2..);
-            let (name, has_eq, value) = match rest.split_once('=') {
-                Some((name, value)) => (name, true, Some(value)),
-                None => (rest, false, None),
+            let (name, inline_value) = match rest.split_once('=') {
+                Some((name, value)) => (name, RawInlineValue::Eq(value)),
+                None => (rest, RawInlineValue::None),
             };
             // Include proceeding "--" only for single-char long arguments.
             let enc_name = if name.len() != 1 { name } else { buf.index(..3) };
             let enc_name = enc_name
                 .to_str()
                 .ok_or_else(|| ErrorKind::InvalidUtf8.with_input(enc_name.into()))?;
-            Ok(Some(Arg::EncodedNamed(enc_name, has_eq, value)))
+            Ok(Some(RawArg::EncodedNamed(enc_name, inline_value)))
         } else if buf.starts_with("-") && buf.len() != 1 {
             self.next_short_idx = Some(NonZero::new(1).unwrap());
             self.next_arg(buf)
         } else {
-            Ok(Some(Arg::Unnamed(std::mem::take(buf))))
+            Ok(Some(RawArg::Unnamed(std::mem::take(buf))))
         }
     }
 
@@ -729,20 +780,27 @@ impl<'i> RawParser<'i> {
         self.next_short_idx = None;
     }
 
-    fn next_value(&mut self, attrs: ArgAttrs) -> Option<OsString> {
+    /// Consume the next argument as an outlined value for named argument.
+    ///
+    /// If the next raw argument starts with `-` and `attrs` disallows it, an
+    /// error will be returned.
+    fn next_arg_as_value(&mut self, attrs: ArgAttrs) -> Result<OsString> {
         assert!(self.next_short_idx.is_none());
-        self.iter.next().filter(|raw| {
-            let raw = raw.as_encoded_bytes();
-            if raw == b"-" || !raw.starts_with(b"-") {
-                return true;
-            }
-            if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_ANY) {
-                true
-            } else if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_NUM) {
-                raw[1..].iter().all(|b| b.is_ascii_digit())
-            } else {
-                false
-            }
-        })
+        self.iter
+            .next()
+            .filter(|raw| {
+                let raw = raw.as_encoded_bytes();
+                if raw == b"-" || !raw.starts_with(b"-") {
+                    return true;
+                }
+                if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_ANY) {
+                    true
+                } else if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_NUM) {
+                    raw[1..].iter().all(|b| b.is_ascii_digit())
+                } else {
+                    false
+                }
+            })
+            .ok_or_else(|| ErrorKind::MissingValue.into())
     }
 }

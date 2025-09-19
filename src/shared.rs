@@ -39,13 +39,16 @@ impl ArgAttrs {
         NonZero::new((self.0 >> 8) as u8)
     }
 
-    /// Is this a named flag that accepts no value? Eg. `--verbose`.
-    pub const NO_VALUE: Self = Self(1 << 16);
+    /// Does this argument require a value? This means it will consume the next
+    /// argument as its value if no inlined value is provided.
+    pub const REQUIRE_VALUE: Self = Self(1 << 16);
     /// Does this argument require an inlined value via `=`?
     pub const REQUIRE_EQ: Self = Self(1 << 17);
     /// Does this argument eat the next raw argument even if it starts with `-`?
+    /// Only meaningful if [`Self::REQUIRE_VALUE`] is set.
     pub const ACCEPT_HYPHEN_ANY: Self = Self(1 << 18);
     /// Does this argument eat the next raw argument but only if it is a negative number?
+    /// Only meaningful if [`Self::REQUIRE_VALUE`] is set.
     pub const ACCEPT_HYPHEN_NUM: Self = Self(1 << 19);
     /// Is this a global argument?
     pub const GLOBAL: Self = Self(1 << 20);
@@ -53,6 +56,9 @@ impl ArgAttrs {
     pub const MAKE_LOWERCASE: Self = Self(1 << 21);
     /// Is this a greedy variable-length unnamed args that consumes everything after?
     pub const GREEDY: Self = Self(1 << 22);
+    /// Is an inlined value provided?
+    /// This flag is only set by the parser runtime to inform the place implementation.
+    pub const HAS_INLINE_VALUE: Self = Self(1 << 23);
 
     pub fn set(&mut self, other: Self, value: bool) {
         if value {
