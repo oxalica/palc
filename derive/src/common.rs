@@ -20,18 +20,17 @@ pub const TY_VEC: &str = "Vec";
 /// This is matched literally and does NOT try to be smart, i.e.
 /// it does not recognize absolute paths or unwrap parenthesis.
 pub fn strip_ty_ctor<'i>(ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
-    if let Type::Path(syn::TypePath { qself: None, path }) = ty {
-        if path.leading_colon.is_none() && path.segments.len() == 1 {
-            let seg = &path.segments[0];
-            if seg.ident == ty_ctor {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if args.args.len() == 1 {
-                        if let GenericArgument::Type(arg_ty) = &args.args[0] {
-                            return Some(arg_ty);
-                        }
-                    }
-                }
-            }
+    if let Type::Path(syn::TypePath { qself: None, path }) = ty
+        && path.leading_colon.is_none()
+        && path.segments.len() == 1
+    {
+        let seg = &path.segments[0];
+        if seg.ident == ty_ctor
+            && let PathArguments::AngleBracketed(args) = &seg.arguments
+            && args.args.len() == 1
+            && let GenericArgument::Type(arg_ty) = &args.args[0]
+        {
+            return Some(arg_ty);
         }
     }
     None
@@ -94,13 +93,13 @@ impl ArgOrCommand {
             if path.is_ident("arg") {
                 let arg = arg.get_or_insert_default();
                 try_syn(attr.parse_nested_meta(|meta| arg.parse_update(&meta)));
-            } else if path.is_ident("command") {
-                if let Some(c) = try_syn(attr.parse_args::<ArgsCommandMeta>()) {
-                    if command.is_some() {
-                        emit_error!(path, "duplicated command(..)");
-                    }
-                    command = Some((path.span(), c));
+            } else if path.is_ident("command")
+                && let Some(c) = try_syn(attr.parse_args::<ArgsCommandMeta>())
+            {
+                if command.is_some() {
+                    emit_error!(path, "duplicated command(..)");
                 }
+                command = Some((path.span(), c));
             }
         }
 

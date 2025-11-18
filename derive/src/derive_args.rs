@@ -612,13 +612,13 @@ pub fn expand_state_def_impl<'i>(
 
     out.assign_field_idx();
 
-    if let Some(f) = out.direct_fields().find(|f| f.exclusive) {
-        if !out.flatten_fields.is_empty() {
-            emit_error!(
-                f.ident,
-                "TODO: arg(exclusive) is not supported on struct containing arg(flatten) yet",
-            );
-        }
+    if let Some(f) = out.direct_fields().find(|f| f.exclusive)
+        && !out.flatten_fields.is_empty()
+    {
+        emit_error!(
+            f.ident,
+            "TODO: arg(exclusive) is not supported on struct containing arg(flatten) yet",
+        );
     }
 
     Ok(out)
@@ -985,22 +985,22 @@ impl ToTokens for RawArgsInfo<'_> {
                 }
             }
         }
-        if let Some(f) = &self.0.variable_num_unnamed {
-            if !f.hide {
-                // Variable unnamed fields are visible, no matter it's
-                // optional (`[ARGS]...`) or required (`<ARGS>...`).
-                usage_unnamed.maybe_push_usage_for(f);
-                help_unnamed.maybe_push_help_for(f);
-            }
+        if let Some(f) = &self.0.variable_num_unnamed
+            && !f.hide
+        {
+            // Variable unnamed fields are visible, no matter it's
+            // optional (`[ARGS]...`) or required (`<ARGS>...`).
+            usage_unnamed.maybe_push_usage_for(f);
+            help_unnamed.maybe_push_help_for(f);
         }
         // -- [LAST]
-        if let Some(f) = &self.0.last_unnamed {
-            if !f.hide {
-                // FIXME: Optional last?
-                usage_unnamed.template.push_str(" --");
-                usage_unnamed.maybe_push_usage_for(f);
-                help_unnamed.maybe_push_help_for(f);
-            }
+        if let Some(f) = &self.0.last_unnamed
+            && !f.hide
+        {
+            // FIXME: Optional last?
+            usage_unnamed.template.push_str(" --");
+            usage_unnamed.maybe_push_usage_for(f);
+            help_unnamed.maybe_push_help_for(f);
         }
 
         let fmt_fn = quote! {

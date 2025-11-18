@@ -388,10 +388,10 @@ impl dyn ParserChain + '_ {
     ) -> ControlFlow<(&mut dyn Parsable, ArgAttrs, &'static RawArgsInfo)> {
         let Some(node) = self.out() else { return ControlFlow::Continue(()) };
         let info = node.state.info();
-        if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name) {
-            if attrs.contains(ArgAttrs::GLOBAL) {
-                return ControlFlow::Break((place, attrs, info));
-            }
+        if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name)
+            && attrs.contains(ArgAttrs::GLOBAL)
+        {
+            return ControlFlow::Break((place, attrs, info));
         }
         node.ancestors.feed_global_named(enc_name)
     }
