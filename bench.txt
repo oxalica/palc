@@ -1,5 +1,6 @@
 # Runs on AMD Ryzen 7 5700G, x86_64-linux. Your result may vary.
-# Commit: 3da6f23f3b5d525f037b3da1128c26c07e706f26
+# Commit: 329c8c30f6a173d857a4008ac49eb239f7de2c00
+# Rust: rustc 1.91.1
 
 # Note 1: "full-build" and "incremental" columns are using "dev" profile.
 # Note 2: Keep in mind that argh supports much fewer features than palc and clap.
@@ -8,12 +9,12 @@
 #     because palc does not support them yet.
 
 name                      minimal      default   full-build  incremental
-simple-clap                309KiB       460KiB     0:03.03      0:00.03
-simple-argh               38.8KiB      40.4KiB     0:04.26      0:00.03
-simple-palc               25.7KiB      33.3KiB     0:02.43      0:00.03
-simple-none               8.86KiB      8.86KiB     0:00.12      0:00.03
-criterion-clap             441KiB       595KiB     0:03.10      0:00.03
-criterion-argh            52.0KiB      58.2KiB     0:04.28      0:00.03
-criterion-palc            46.0KiB      63.8KiB     0:02.50      0:00.03
-deno-clap                  536KiB       685KiB     0:03.21      0:00.04
-deno-palc                 82.6KiB       116KiB     0:02.65      0:00.03
+simple-clap                311KiB       461KiB     0:02.92      0:00.03
+simple-argh               38.6KiB      40.9KiB     0:03.26      0:00.03
+simple-palc               26.3KiB      33.2KiB     0:02.45      0:00.03
+simple-none               9.12KiB      9.12KiB     0:00.12      0:00.03
+criterion-clap             440KiB       592KiB     0:03.09      0:00.03
+criterion-argh            52.5KiB      57.5KiB     0:03.29      0:00.03
+criterion-palc            46.2KiB      57.5KiB     0:02.49      0:00.03
+deno-clap                  535KiB       681KiB     0:03.18      0:00.03
+deno-palc                 82.2KiB       115KiB     0:02.64      0:00.03

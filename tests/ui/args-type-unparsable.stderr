@@ -1,66 +1,82 @@
 error[E0277]: `MyType` cannot be parsed into a palc argument value
- --> tests/ui/args-type-unparsable.rs:5:10
-  |
-5 |     arg: MyType,
-  |          ^^^^^^ unparsable value type
-  |
-  = help: the trait `ValueParser` is not implemented for `MyType`
-  = note: this is an internal trait that should NOT be implemented directly
-  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
-              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+  --> tests/ui/args-type-unparsable.rs:5:10
+   |
+ 5 |     arg: MyType,
+   |          ^^^^^^ unparsable value type
+   |
+help: the trait `ValueParser` is not implemented for `MyType`
+  --> tests/ui/args-type-unparsable.rs:19:1
+   |
+19 | struct MyType;
+   | ^^^^^^^^^^^^^
+   = note: this is an internal trait that should NOT be implemented directly
+   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
 note: required by a bound in `assert_auto_infer_value_parser_ok`
- --> src/values.rs
-  |
-  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
-  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
+  --> src/values.rs
+   |
+   | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+   |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
- --> tests/ui/args-type-unparsable.rs:9:18
-  |
-9 |     vec_arg: Vec<MyType>,
-  |                  ^^^^^^ unparsable value type
-  |
-  = help: the trait `ValueParser` is not implemented for `MyType`
-  = note: this is an internal trait that should NOT be implemented directly
-  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
-              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+  --> tests/ui/args-type-unparsable.rs:9:18
+   |
+ 9 |     vec_arg: Vec<MyType>,
+   |                  ^^^^^^ unparsable value type
+   |
+help: the trait `ValueParser` is not implemented for `MyType`
+  --> tests/ui/args-type-unparsable.rs:19:1
+   |
+19 | struct MyType;
+   | ^^^^^^^^^^^^^
+   = note: this is an internal trait that should NOT be implemented directly
+   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
 note: required by a bound in `assert_auto_infer_value_parser_ok`
- --> src/values.rs
-  |
-  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
-  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
+  --> src/values.rs
+   |
+   | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+   |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
- --> tests/ui/args-type-unparsable.rs:3:17
-  |
-3 |     positional: MyType,
-  |                 ^^^^^^ unparsable value type
-  |
-  = help: the trait `ValueParser` is not implemented for `MyType`
-  = note: this is an internal trait that should NOT be implemented directly
-  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
-              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+  --> tests/ui/args-type-unparsable.rs:3:17
+   |
+ 3 |     positional: MyType,
+   |                 ^^^^^^ unparsable value type
+   |
+help: the trait `ValueParser` is not implemented for `MyType`
+  --> tests/ui/args-type-unparsable.rs:19:1
+   |
+19 | struct MyType;
+   | ^^^^^^^^^^^^^
+   = note: this is an internal trait that should NOT be implemented directly
+   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
 note: required by a bound in `assert_auto_infer_value_parser_ok`
- --> src/values.rs
-  |
-  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
-  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
+  --> src/values.rs
+   |
+   | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+   |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
- --> tests/ui/args-type-unparsable.rs:7:14
-  |
-7 |     vec: Vec<MyType>,
-  |              ^^^^^^ unparsable value type
-  |
-  = help: the trait `ValueParser` is not implemented for `MyType`
-  = note: this is an internal trait that should NOT be implemented directly
-  = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
-              `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
+  --> tests/ui/args-type-unparsable.rs:7:14
+   |
+ 7 |     vec: Vec<MyType>,
+   |              ^^^^^^ unparsable value type
+   |
+help: the trait `ValueParser` is not implemented for `MyType`
+  --> tests/ui/args-type-unparsable.rs:19:1
+   |
+19 | struct MyType;
+   | ^^^^^^^^^^^^^
+   = note: this is an internal trait that should NOT be implemented directly
+   = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
+               `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
 note: required by a bound in `assert_auto_infer_value_parser_ok`
- --> src/values.rs
-  |
-  | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
-  |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
+  --> src/values.rs
+   |
+   | pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+   |                                             ^^^^^^^^^^^ required by this bound in `assert_auto_infer_value_parser_ok`
 
 error[E0277]: `MyType` cannot be parsed into a palc argument value
   --> tests/ui/args-type-unparsable.rs:16:32
@@ -68,7 +84,11 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 16 |     option_vec_arg: Option<Vec<MyType>>,
    |                                ^^^^^^ unparsable value type
    |
-   = help: the trait `ValueParser` is not implemented for `MyType`
+help: the trait `ValueParser` is not implemented for `MyType`
+  --> tests/ui/args-type-unparsable.rs:19:1
+   |
+19 | struct MyType;
+   | ^^^^^^^^^^^^^
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
@@ -84,7 +104,11 @@ error[E0277]: `MyType` cannot be parsed into a palc argument value
 14 |     option_vec: Option<Vec<MyType>>,
    |                            ^^^^^^ unparsable value type
    |
-   = help: the trait `ValueParser` is not implemented for `MyType`
+help: the trait `ValueParser` is not implemented for `MyType`
+  --> tests/ui/args-type-unparsable.rs:19:1
+   |
+19 | struct MyType;
+   | ^^^^^^^^^^^^^
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
