@@ -70,9 +70,9 @@ fn flag() {
         expect!["the argument '-v, --verbose' cannot be used multiple times"],
     );
 
-    check_err::<Cli>(["", "--verbose="], expect!["unexpected value for '-v, --verbose'"]);
+    check_err::<Cli>(["", "--verbose=9"], expect!["unexpected value '9' for '-v, --verbose'"]);
     check_err::<Cli>(["", "-vd"], expect!["unexpected argument '-d'"]);
-    check_err::<Cli>(["", "-v="], expect!["unexpected value for '-v, --verbose'"]);
+    check_err::<Cli>(["", "-v="], expect!["unexpected value '' for '-v, --verbose'"]);
 }
 
 #[test]

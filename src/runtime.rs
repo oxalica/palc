@@ -176,12 +176,12 @@ impl Parsable for FlagPlace {
         &mut self,
         _: &mut RawParser,
         attrs: ArgAttrs,
-        _: &OsStr,
+        value: &OsStr,
         _: &OsStr,
         _: &mut dyn ParserChain,
     ) -> Result<()> {
         if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
-            return Err(ErrorKind::UnexpectedInlineValue.into());
+            return Err(ErrorKind::UnexpectedInlineValue.with_input(value.into()));
         }
         if self.0 {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
