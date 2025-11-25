@@ -25,6 +25,7 @@ mod values;
 mod help;
 
 pub use crate::error::Error;
+use crate::runtime::ParserFlavor;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Not public API. Only for proc-macro internal use.
@@ -82,7 +83,7 @@ pub trait Parser: ParserInternal + Sized + 'static {
         let mut iter = iter.into_iter().map(|s| s.into());
         let arg0 = iter.next().ok_or(ErrorKind::MissingArg0)?;
         let program_name = Path::new(&arg0).file_name().unwrap_or(arg0.as_ref());
-        Self::__parse_toplevel(&mut RawParser::new(&mut iter), program_name)
+        Self::__Flavor::run_parser(&mut RawParser::new(&mut iter), program_name)
     }
 
     #[cfg(feature = "help")]

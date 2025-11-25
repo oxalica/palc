@@ -31,9 +31,7 @@ fn fallback(ident: &Ident) -> TokenStream {
 
         #[automatically_derived]
         impl __rt::ParserInternal for #ident {
-            fn __parse_toplevel(_: &mut __rt::RawParser, _: &__rt::OsStr) -> __rt::Result<Self> {
-                __rt::unreachable!()
-            }
+            type __Flavor = __rt::FallbackParserFlavor;
         }
     }
 }
@@ -47,9 +45,7 @@ fn try_expand_for_named_struct(input: &DeriveInput, fields: &FieldsNamed) -> Res
 
         #[automatically_derived]
         impl __rt::ParserInternal for #ident {
-            fn __parse_toplevel(__p: &mut __rt::RawParser, __program_name: &__rt::OsStr) -> __rt::Result<Self> {
-                __rt::try_parse_state::<<Self as __rt::Args>::__State>(__p, __program_name, &mut ())
-            }
+            type __Flavor = __rt::StructParserFlavor<Self>;
         }
     });
     Ok(tts)

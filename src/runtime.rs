@@ -18,7 +18,31 @@ use super::Error;
 /// Not in public API.
 #[doc(hidden)]
 pub trait ParserInternal: Sized {
-    fn __parse_toplevel(p: &mut RawParser, program_name: &OsStr) -> Result<Self>;
+    #[expect(private_bounds, reason = "opaque to proc-macro")]
+    type __Flavor: ParserFlavor<Self>;
+}
+
+pub(crate) trait ParserFlavor<T>: Sized {
+    fn run_parser(p: &mut RawParser, program_name: &OsStr) -> Result<T>;
+}
+
+/// The fallback type for graceful failing from proc-macro.
+pub struct FallbackParserFlavor;
+impl<T> ParserFlavor<T> for FallbackParserFlavor {
+    fn run_parser(_p: &mut RawParser, _program_name: &OsStr) -> Result<T> {
+        // Never called at runtime.
+        unreachable!()
+    }
+}
+
+/// Top-level parser for a single struct entry.
+///
+/// It ignores the 0-th argument (argv[0]) and parsing arguments after.
+pub struct StructParserFlavor<A>(A);
+impl<A: Args> ParserFlavor<A> for StructParserFlavor<A> {
+    fn run_parser(p: &mut RawParser, program_name: &OsStr) -> Result<A> {
+        try_parse_state::<A::__State>(p, program_name, &mut ())
+    }
 }
 
 /// Trait of argument structs, for composition.
