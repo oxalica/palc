@@ -62,7 +62,7 @@ note: required because it appears within the type `Cli1State`
 note: required by a bound in `ParserState`
   --> src/runtime.rs
    |
-   | pub trait ParserState: Default + ParserStateDyn {
+   | pub trait ParserState: Default + ArgsVisitor {
    |                        ^^^^^^^ required by this bound in `ParserState`
 
 error[E0277]: cannot flatten `Deep` which is not a `palc::Args`
@@ -154,7 +154,7 @@ note: required because it appears within the type `Cli2State`
 note: required by a bound in `ParserState`
   --> src/runtime.rs
    |
-   | pub trait ParserState: Default + ParserStateDyn {
+   | pub trait ParserState: Default + ArgsVisitor {
    |                        ^^^^^^^ required by this bound in `ParserState`
 
 error[E0277]: cannot flatten `Subcmd` which is not a `palc::Args`

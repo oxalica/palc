@@ -46,7 +46,7 @@ pub(crate) enum ErrorKind {
     UnknownNamedArgument,
     UnknownSubcommand,
     DuplicatedNamedArgument,
-    ExtraUnnamedArgument,
+    ExtraPositionalArgument,
     UnexpectedInlineValue,
     MissingValue,
     InvalidValue,
@@ -127,7 +127,7 @@ impl fmt::Display for Error {
                 opt_arg(f, false)?;
                 f.write_str(" cannot be used multiple times")
             }
-            ErrorKind::ExtraUnnamedArgument => {
+            ErrorKind::ExtraPositionalArgument => {
                 f.write_str("unexpected argument")?;
                 opt_input(f)
             }

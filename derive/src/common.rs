@@ -137,7 +137,7 @@ pub struct ArgMeta {
     pub allow_negative_numbers: bool,
     pub ignore_case: bool,
 
-    // Unnamed argument behaviors.
+    // Positional argument behaviors.
     pub trailing_var_arg: bool,
     pub last: bool,
     // TODO: raw

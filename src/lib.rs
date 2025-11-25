@@ -170,7 +170,7 @@ pub use palc_derive::Parser;
 ///     deterministic, and may change in the future.
 ///     The current behavior is: only one argument "wins" and consumes the value.
 ///
-///   - Unnamed arguments
+///   - Positional arguments
 ///
 ///     TODO: Not yet supported to be flattened.
 ///

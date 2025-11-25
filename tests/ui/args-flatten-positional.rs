@@ -8,7 +8,7 @@ struct Outer {
 
 #[derive(Args)]
 struct Inner {
-    unnamed: String,
+    arg: String,
 }
 
 fn main() {}

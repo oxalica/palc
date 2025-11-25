@@ -113,7 +113,7 @@ fn require_equals() {
 fn required() {
     #[derive(Debug, PartialEq, Parser)]
     struct Cli {
-        // TODO: Reject bool as unnamed arguments. It is almost always an typo.
+        // TODO: Reject bool as positional arguments. It is almost always an typo.
         #[arg(long)]
         key: String,
         file: String,

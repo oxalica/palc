@@ -152,7 +152,7 @@ fn default_value() {
         #[arg(long, default_value_t = "foo".into())]
         infer: String,
         #[arg(default_value = "static")]
-        unnamed: Option<String>,
+        positional: Option<String>,
     }
 
     assert_help::<Cli>(
@@ -161,7 +161,7 @@ fn default_value() {
             Usage: me [OPTIONS]
 
             Arguments:
-              [UNNAMED]
+              [POSITIONAL]
                       [default: static]
 
             Options:

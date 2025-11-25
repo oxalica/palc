@@ -47,7 +47,7 @@ Though some of clap features are not-yet-implemented.
     - [ ] Space-delimited multi-values.
     - [x] Custom-delimited multi-values.
     - [ ] Multi-values with value-terminator.
-  - [x] Unnamed/free/positional arguments `FILE`.
+  - [x] Positional/unnamed/free arguments `FILE`.
     - [x] Force no named arguments `--`.
     - [x] Greedy/tail arguments (`arg(trailing_var_arg)`).
     - [x] Last arguments after `--` (`arg(last)`).
@@ -58,15 +58,15 @@ Though some of clap features are not-yet-implemented.
   - [ ] Overrides.
 
   - List of [magic argument types](https://docs.rs/clap/4.5.40/clap/_derive/index.html#arg-types) with automatic default behaviors:
-    - [x] `T where T: TryFrom<&OsStr> || TryFrom<&str> || FromStr` (named & unnamed)
+    - [x] `T where T: TryFrom<&OsStr> || TryFrom<&str> || FromStr` (named & positional)
     - [x] `bool` (named)
     - [x] `Option<T>` (named)
     - [x] `Option<Option<T>>` (named)
       Optional argument with an optional value, eg. `--foo`, `--foo=bar` or nothing.
       It requires `require_equals = true` to avoid parsing ambiguity and confusion.
       See: <https://github.com/clap-rs/clap/issues/3030>
-    - [x] `Vec<T>` (named & unnamed)
-    - [x] `Option<Vec<T>>` (named & unnamed)
+    - [x] `Vec<T>` (named & positional)
+    - [x] `Option<Vec<T>>` (named & positional)
     - [ ] `Vec<Vec<T>>`
     - [ ] `Option<Vec<Vec<T>>>`
     
@@ -102,10 +102,10 @@ Though some of clap features are not-yet-implemented.
   - [x] `arg(flatten)`.
     - Note that non-flatten arguments always take precedence over flatten arguments.
     - [x] Flatten named arguments.
-    - [ ] Flatten unnamed arguments.
+    - [ ] Flatten positional arguments.
   - [x] Subcommands.
     - [ ] Argv0 as subcommand (multi-call binary).
-    - [x] Prefer parsing subcommand over unnamed arguments.
+    - [x] Prefer parsing subcommand over positional arguments.
     - [x] Global args.
       - Note: Current implementation has limitations on the number of values it takes.
         And it only propagates up if the inner Args cannot accept the named arguments --

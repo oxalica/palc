@@ -96,7 +96,7 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         w!("\n");
     }
 
-    // List of unnamed arguments.
+    // List of positional arguments.
     {
         let last = out.len();
         w!("Arguments:\n");

@@ -68,11 +68,12 @@ pub struct ParserStateDefImpl<'i> {
     pub output_ctor: Option<TokenStream>,
 
     named_fields: Vec<FieldInfo<'i>>,
-    unnamed_fields: Vec<FieldInfo<'i>>,
-    variable_num_unnamed: Option<FieldInfo<'i>>,
+    positional_fields: Vec<FieldInfo<'i>>,
+    /// The positional argument that takes a variable number of raw input arguments.
+    variable_num_field: Option<FieldInfo<'i>>,
     /// The last argument that accepts only after `--`.  Since it's after `--`,
     /// it is always greedy and skips subcommand or named argument handling.
-    last_unnamed: Option<FieldInfo<'i>>,
+    last_field: Option<FieldInfo<'i>>,
 
     /// The total number of direct fields, excluding flattened or subcommand fields.
     direct_field_cnt: u8,
@@ -88,19 +89,19 @@ pub struct ParserStateDefImpl<'i> {
 impl ParserStateDefImpl<'_> {
     /// All fields directly parsed, excluding flattened and subcommands fields.
     fn direct_fields(&self) -> impl Iterator<Item = &FieldInfo<'_>> {
-        self.unnamed_fields
+        self.positional_fields
             .iter()
-            .chain(&self.variable_num_unnamed)
-            .chain(&self.last_unnamed)
+            .chain(&self.variable_num_field)
+            .chain(&self.last_field)
             .chain(&self.named_fields)
     }
 
     fn assign_field_idx(&mut self) {
         for (f, i) in self
-            .unnamed_fields
+            .positional_fields
             .iter_mut()
-            .chain(&mut self.variable_num_unnamed)
-            .chain(&mut self.last_unnamed)
+            .chain(&mut self.variable_num_field)
+            .chain(&mut self.last_field)
             .chain(&mut self.named_fields)
             .zip(0..)
         {
@@ -124,7 +125,7 @@ struct FieldInfo<'i> {
     value_parser: ValueParser<'i>,
 
     // Arg configurables //
-    /// Encoded names for matching. Empty for unnamed arguments.
+    /// Encoded names for matching. Empty for positional arguments.
     enc_names: Vec<String>,
     attrs: ArgAttrs,
 
@@ -296,9 +297,9 @@ pub fn expand_state_def_impl<'i>(
         output_ctor: None,
 
         named_fields: Vec::new(),
-        unnamed_fields: Vec::new(),
-        variable_num_unnamed: None,
-        last_unnamed: None,
+        positional_fields: Vec::new(),
+        variable_num_field: None,
+        last_field: None,
         direct_field_cnt: 0,
 
         flatten_fields: Vec::new(),
@@ -389,7 +390,7 @@ pub fn expand_state_def_impl<'i>(
             } else if !arg.is_named() {
                 emit_error!(
                     lit_ch,
-                    "TODO: arg(value_delimiter) is not yet supported on unnamed arguments",
+                    "TODO: arg(value_delimiter) is not yet supported on positional arguments",
                 );
                 None
             } else {
@@ -525,7 +526,7 @@ pub fn expand_state_def_impl<'i>(
                 hide: arg.hide,
             });
         } else {
-            // Unnamed arguments.
+            // Positional arguments.
 
             if arg.require_equals || arg.global || arg.ignore_case {
                 emit_error!(
@@ -580,32 +581,32 @@ pub fn expand_state_def_impl<'i>(
                     emit_error!(ident, "TODO: arg(last) only supports Vec-like types yet");
                 }
 
-                if let Some(prev) = &out.last_unnamed {
+                if let Some(prev) = &out.last_field {
                     emit_error!(ident, "duplicated arg(last)");
                     emit_error!(prev.ident, "previously defined here");
                 } else {
-                    out.last_unnamed = Some(info);
+                    out.last_field = Some(info);
                 }
             } else if is_variable_num {
-                // Variable length unnamed argument.
-                if let Some(prev) = &out.variable_num_unnamed {
+                // Variable length positional argument.
+                if let Some(prev) = &out.variable_num_field {
                     emit_error!(ident, "duplicated variable-length arguments");
                     emit_error!(prev.ident, "previously defined here");
                 } else {
-                    out.variable_num_unnamed = Some(info);
+                    out.variable_num_field = Some(info);
                 }
             } else {
-                // Single unnamed argument.
+                // Single positional argument.
 
-                if let Some(prev) = &out.variable_num_unnamed {
+                if let Some(prev) = &out.variable_num_field {
                     emit_error!(
                         ident,
-                        "cannot have more unnamed arguments after a variable-length arguments"
+                        "cannot have more positional arguments after a variable-length positional argument"
                     );
                     emit_error!(prev.ident, "previous variable-length argument");
                 }
 
-                out.unnamed_fields.push(info);
+                out.positional_fields.push(info);
             }
         }
     }
@@ -676,8 +677,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
             }
         }
 
-        let feed_named_func = FeedNamedImpl(self);
-        let feed_unnamed_func = FeedUnnamedImpl(self);
+        let visit_named_func = VisitNamedImpl(self);
+        let visit_positional_func = VisitPositionalImpl(self);
         let validation = ValidationImpl(self);
 
         let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
@@ -686,7 +687,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let has_subcommand = self.subcommand.is_some();
 
         let direct_field_cnt = self.direct_field_cnt;
-        let direct_unnamed_arg_cnt = self.unnamed_fields.len() as u8;
+        let direct_positional_arg_cnt = self.positional_fields.len() as u8;
         let flatten_tys1 = self.flatten_tys();
         let flatten_tys2 = self.flatten_tys();
 
@@ -705,7 +706,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
                 const TOTAL_ARG_CNT: __rt::u8 = #direct_field_cnt
                     #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*;
-                const TOTAL_UNNAMED_ARG_CNT: __rt::u8 = #direct_unnamed_arg_cnt
+                const TOTAL_UNNAMED_ARG_CNT: __rt::u8 = #direct_positional_arg_cnt
                     #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
                 fn finish(&mut self) -> __rt::Result<Self::Output> {
@@ -717,9 +718,9 @@ impl ToTokens for ParserStateDefImpl<'_> {
             }
 
             #[automatically_derived]
-            impl __rt::ParserStateDyn for #state_name {
-                #feed_named_func
-                #feed_unnamed_func
+            impl __rt::ArgsVisitor for #state_name {
+                #visit_named_func
+                #visit_positional_func
 
                 fn info(&self) -> &'static __rt::RawArgsInfo {
                     &<Self as __rt::ParserState>::RAW_ARGS_INFO
@@ -732,10 +733,10 @@ impl ToTokens for ParserStateDefImpl<'_> {
     }
 }
 
-/// `fn feed_named` generator.
-struct FeedNamedImpl<'i>(&'i ParserStateDefImpl<'i>);
+/// `fn visit_named` generator.
+struct VisitNamedImpl<'i>(&'i ParserStateDefImpl<'i>);
 
-impl ToTokens for FeedNamedImpl<'_> {
+impl ToTokens for VisitNamedImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let def = self.0;
 
@@ -764,7 +765,7 @@ impl ToTokens for FeedNamedImpl<'_> {
                     }
                 });
             quote! {
-                #(__rt::ParserStateDyn::feed_named(&mut self.#flatten_names, __name).map_break(|mut __ret| {
+                #(__rt::ArgsVisitor::visit_named(&mut self.#flatten_names, __name).map_break(|mut __ret| {
                     // FIXME: Add tests to ensure this overflow is caught at compile time.
                     // NB: This relies on that `ArgAttrs::index` is at the lowest 8-bits.
                     __ret.1.0 += const { #offsets } as ::std::primitive::u32;
@@ -785,23 +786,23 @@ impl ToTokens for FeedNamedImpl<'_> {
         };
 
         tokens.extend(quote! {
-            fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
+            fn visit_named(&mut self, __name: &__rt::str) -> __rt::VisitNamedResult<'_> {
                 #body
             }
         });
     }
 }
 
-// `fn feed_unnamed` generator.
-struct FeedUnnamedImpl<'i>(&'i ParserStateDefImpl<'i>);
+// `fn visit_positional` generator.
+struct VisitPositionalImpl<'i>(&'i ParserStateDefImpl<'i>);
 
-impl ToTokens for FeedUnnamedImpl<'_> {
+impl ToTokens for VisitPositionalImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let def = self.0;
 
-        if def.unnamed_fields.is_empty()
-            && def.variable_num_unnamed.is_none()
-            && def.last_unnamed.is_none()
+        if def.positional_fields.is_empty()
+            && def.variable_num_field.is_none()
+            && def.last_field.is_none()
             && def.subcommand.is_none()
         {
             return;
@@ -821,7 +822,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
                 // It seems impossible to somehow return it by partly erase the subcommand type.
                 if !__is_last
-                    && <#ty as __rt::Subcommand>::feed_subcommand(__arg).is_some()
+                    && <#ty as __rt::Subcommand>::get_subcommand_parser(__arg).is_some()
                 {
                     return __rt::place_for_subcommand::<__Subcommand>(self);
                 }
@@ -830,7 +831,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
 
         let mut arms = TokenStream::new();
         for (ord, FieldInfo { ident, value_parser, attrs, .. }) in
-            def.unnamed_fields.iter().enumerate()
+            def.positional_fields.iter().enumerate()
         {
             arms.extend(quote! {
                 #ord => (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs),
@@ -839,7 +840,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
 
         // Note: The catchall path is only entered if the subcommand does not match.
         let catchall =
-            if let Some(FieldInfo { ident, value_parser, attrs, .. }) = &def.variable_num_unnamed {
+            if let Some(FieldInfo { ident, value_parser, attrs, .. }) = &def.variable_num_field {
                 quote! { (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs) }
             } else if def.subcommand.is_some() {
                 // Here we know the previous subcommand parse failed.
@@ -849,7 +850,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 quote! { return __rt::ControlFlow::Continue(()) }
             };
 
-        let handle_last = def.last_unnamed.as_ref().map(|FieldInfo { ident, value_parser, attrs, .. }| {
+        let handle_last = def.last_field.as_ref().map(|FieldInfo { ident, value_parser, attrs, .. }| {
             quote! {
                 if __is_last {
                     return __rt::ControlFlow::Break((__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs));
@@ -860,12 +861,12 @@ impl ToTokens for FeedUnnamedImpl<'_> {
         tokens.extend(quote! {
             // If there is no match arm.
             #[allow(unreachable_code)]
-            fn feed_unnamed(
+            fn visit_positional(
                 &mut self,
                 __arg: &__rt::OsStr,
                 __idx: __rt::usize,
                 __is_last: __rt::bool,
-            ) -> __rt::FeedUnnamed {
+            ) -> __rt::VisitPositionalResult {
                 #handle_last
                 #handle_subcmd
                 __rt::ControlFlow::Break(match __idx {
@@ -969,12 +970,12 @@ impl ToTokens for RawArgsInfo<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         // Generate help string formatter.
         let mut usage_named = FormatArgsBuilder::default();
-        let mut usage_unnamed = FormatArgsBuilder::default();
+        let mut usage_positional = FormatArgsBuilder::default();
         let mut help_named = FormatArgsBuilder::default();
-        let mut help_unnamed = FormatArgsBuilder::default();
+        let mut help_positional = FormatArgsBuilder::default();
         for (fields, help, usage) in [
             (&self.0.named_fields[..], &mut help_named, &mut usage_named),
-            (&self.0.unnamed_fields[..], &mut help_unnamed, &mut usage_unnamed),
+            (&self.0.positional_fields[..], &mut help_positional, &mut usage_positional),
         ] {
             for f in fields {
                 if !f.hide {
@@ -985,31 +986,31 @@ impl ToTokens for RawArgsInfo<'_> {
                 }
             }
         }
-        if let Some(f) = &self.0.variable_num_unnamed
+        if let Some(f) = &self.0.variable_num_field
             && !f.hide
         {
-            // Variable unnamed fields are visible, no matter it's
+            // Variable positional fields are always visible, no matter if it is
             // optional (`[ARGS]...`) or required (`<ARGS>...`).
-            usage_unnamed.maybe_push_usage_for(f);
-            help_unnamed.maybe_push_help_for(f);
+            usage_positional.maybe_push_usage_for(f);
+            help_positional.maybe_push_help_for(f);
         }
         // -- [LAST]
-        if let Some(f) = &self.0.last_unnamed
+        if let Some(f) = &self.0.last_field
             && !f.hide
         {
             // FIXME: Optional last?
-            usage_unnamed.template.push_str(" --");
-            usage_unnamed.maybe_push_usage_for(f);
-            help_unnamed.maybe_push_help_for(f);
+            usage_positional.template.push_str(" --");
+            usage_positional.maybe_push_usage_for(f);
+            help_positional.maybe_push_help_for(f);
         }
 
         let fmt_fn = quote! {
             |__w, __what| {
                 // WAIT: Rust 1.89 in order to join `format_args` results and `write_fmt` once.
                 let _ = match __what {
-                    0u8 => __rt::fmt::Write::write_fmt(__w, #help_unnamed),
+                    0u8 => __rt::fmt::Write::write_fmt(__w, #help_positional),
                     1u8 => __rt::fmt::Write::write_fmt(__w, #help_named),
-                    2u8 => __rt::fmt::Write::write_fmt(__w, #usage_unnamed),
+                    2u8 => __rt::fmt::Write::write_fmt(__w, #usage_positional),
                     _ => __rt::fmt::Write::write_fmt(__w, #usage_named),
                 };
             }

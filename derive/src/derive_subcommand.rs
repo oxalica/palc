@@ -172,7 +172,7 @@ impl ToTokens for SubcommandImpl<'_> {
 
                 // If there is no variant.
                 #[allow(unreachable_code)]
-                fn feed_subcommand(__name: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
+                fn get_subcommand_parser(__name: &__rt::OsStr) -> __rt::SubcommandParserFn<Self> {
                     __rt::Some(match __name.to_str() {
                         __rt::Some(__name) => match __name {
                             #(#arg_strs => #cases,)*
@@ -227,7 +227,7 @@ impl ToTokens for UnitVariantStateImpl<'_> {
                 }
             }
 
-            impl __rt::ParserStateDyn for #state_name {
+            impl __rt::ArgsVisitor for #state_name {
                 fn info(&self) -> &'static __rt::RawArgsInfo {
                     <Self as __rt::ParserState>::RAW_ARGS_INFO
                 }

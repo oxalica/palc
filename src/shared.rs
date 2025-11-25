@@ -54,7 +54,7 @@ impl ArgAttrs {
     pub const GLOBAL: Self = Self(1 << 20);
     /// Make the value lowercase before parsing it?
     pub const MAKE_LOWERCASE: Self = Self(1 << 21);
-    /// Is this a greedy variable-length unnamed args that consumes everything after?
+    /// Is this a greedy variable-length positional that consumes everything after?
     pub const GREEDY: Self = Self(1 << 22);
     /// Is an inlined value provided?
     /// This flag is only set by the parser runtime to inform the place implementation.

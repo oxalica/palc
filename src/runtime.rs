@@ -56,7 +56,7 @@ impl<T: 'static> ParserState for FallbackState<T> {
         unreachable!()
     }
 }
-impl<T: 'static> ParserStateDyn for FallbackState<T> {}
+impl<T: 'static> ArgsVisitor for FallbackState<T> {}
 
 // TODO: Invalid default strings are only caught at runtime, which is not ideal.
 pub fn parse_default_str<P: ValueParser>(s: &str, _: P) -> Result<P::Output> {
@@ -94,13 +94,13 @@ pub fn constraint_conflict<S: ParserState, T>(idx: u8) -> Result<T> {
 
 /// Type-erased objects that can be parsed into.
 pub trait Parsable {
-    /// `attrs` is the same value returned from `feed_*`.
+    /// `attrs` is the same value returned from `visit_{named,positional}`.
     /// About `value`:
     /// - For named arguments accepting zero values, it should be ignored.
-    /// - For named or unnamed arguments accepting one value, it is the extracted
+    /// - For named or positional arguments accepting one value, it is the extracted
     ///   string to be parsed, either from `--named=value`, `-ovalue` or `value`.
     ///   The callee should simply parse it.
-    /// - For variable length unnamed arguments, it is the first argument
+    /// - For variable length positional arguments, it is the first argument
     ///   triggering the parsing. The callee should consume it and all the rest arguments.
     ///
     /// `cur_cmd_name` and `ancestors` are only used for subcommand, and should
@@ -191,7 +191,7 @@ impl Parsable for FlagPlace {
     }
 }
 
-/// A multi-occurring named argument or a variable length unnamed argument,
+/// A multi-occurring named argument or a variable length positional argument,
 /// that collects all the values into a `Vec`.
 /// Multiple occurrences can be interleaved by other arguments.
 pub struct VecPlace<T>(Vec<T>);
@@ -236,7 +236,7 @@ impl<P: ValueParser> Parsable for VecParser<P> {
     ) -> Result<()> {
         let v = &mut self.0.0;
 
-        let feed: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.get_delimiter()
+        let visit: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.get_delimiter()
         {
             &mut move |value| {
                 for frag in value.split(char::from(delim.get())) {
@@ -251,17 +251,17 @@ impl<P: ValueParser> Parsable for VecParser<P> {
             }
         };
 
-        feed(value)?;
+        visit(value)?;
         if attrs.contains(ArgAttrs::GREEDY) {
             for value in &mut p.iter {
-                feed(&value)?;
+                visit(&value)?;
             }
         }
         Ok(())
     }
 }
 
-/// A single-occurring single-value named or unnamed argument.
+/// A single-occurring single-value named or positional argument.
 ///
 /// Multiple occurrences produce a duplicated argument error.
 pub struct SetValuePlace<T>(Option<T>);
@@ -370,7 +370,7 @@ impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
 /// `ancestors` are made into trait object for lifetime erasure, or it won't compile.
 pub(crate) struct ParserChainNode<'a, 'b, 'c> {
     pub cmd_name: &'a OsStr,
-    pub state: &'b mut dyn ParserStateDyn,
+    pub state: &'b mut dyn ArgsVisitor,
     pub ancestors: &'c mut dyn ParserChain,
 }
 
@@ -382,18 +382,18 @@ pub trait ParserChain {
 }
 
 impl dyn ParserChain + '_ {
-    fn feed_global_named(
+    fn visit_global_named(
         &mut self,
         enc_name: &str,
     ) -> ControlFlow<(&mut dyn Parsable, ArgAttrs, &'static RawArgsInfo)> {
         let Some(node) = self.out() else { return ControlFlow::Continue(()) };
         let info = node.state.info();
-        if let ControlFlow::Break((place, attrs)) = node.state.feed_named(enc_name)
+        if let ControlFlow::Break((place, attrs)) = node.state.visit_named(enc_name)
             && attrs.contains(ArgAttrs::GLOBAL)
         {
             return ControlFlow::Break((place, attrs, info));
         }
-        node.ancestors.feed_global_named(enc_name)
+        node.ancestors.visit_global_named(enc_name)
     }
 }
 
@@ -408,7 +408,7 @@ impl ParserChain for ParserChainNode<'_, '_, '_> {
     }
 }
 
-pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnamed<'_> {
+pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> VisitPositionalResult<'_> {
     #[derive(RefCast)]
     #[repr(transparent)]
     struct Place<G: GetSubcommand>(G::State);
@@ -436,11 +436,11 @@ pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> FeedUnnam
 
 /// `Break` on a resolved place. `Continue` on unknown names.
 /// So we can `?` in generated code of `command(flatten)`.
-pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn Parsable, ArgAttrs)>;
+pub type VisitNamedResult<'s> = ControlFlow<(&'s mut dyn Parsable, ArgAttrs)>;
 
-pub type FeedUnnamed<'s> = FeedNamed<'s>;
+pub type VisitPositionalResult<'s> = VisitNamedResult<'s>;
 
-pub trait ParserState: Default + ParserStateDyn {
+pub trait ParserState: Default + ArgsVisitor {
     type Output;
 
     const RAW_ARGS_INFO: &'static RawArgsInfo = RawArgsInfo::EMPTY_REF;
@@ -464,7 +464,7 @@ pub trait ParserState: Default + ParserStateDyn {
 /// privacy.
 ///
 /// Here we define a separated (public) trait, but let proc-macro generate a
-/// private witness type inside `feed_unnamed`, hiding the subcommand type from
+/// private witness type inside `visit_positional`, hiding the subcommand type from
 /// public interface.
 pub trait GetSubcommand: 'static {
     type State: ParserState;
@@ -472,7 +472,7 @@ pub trait GetSubcommand: 'static {
     fn get(state: &mut Self::State) -> &mut Option<Self::Subcommand>;
 }
 
-pub trait ParserStateDyn: 'static {
+pub trait ArgsVisitor: 'static {
     /// Try to accept a named argument.
     ///
     /// If this parser accepts named argument `name`, return `Break(argument_place)`;
@@ -482,16 +482,21 @@ pub trait ParserStateDyn: 'static {
     /// - "-s" => "s"
     /// - "--long" => "long"
     /// - "--l" => "--l", to disambiguate from short arguments.
-    fn feed_named(&mut self, _enc_name: &str) -> FeedNamed<'_> {
+    fn visit_named(&mut self, _enc_name: &str) -> VisitNamedResult<'_> {
         ControlFlow::Continue(())
     }
 
-    /// Try to accept an unnamed (positional) argument.
+    /// Try to accept an positional argument.
     ///
     /// `idx` is the index of logical arguments, counting each multi-value-argument as one.
     /// `is_last` indicates if a `--` has been encountered. It does not affect
     /// the increment of `idx`.
-    fn feed_unnamed(&mut self, _arg: &OsStr, _idx: usize, _is_last: bool) -> FeedUnnamed<'_> {
+    fn visit_positional(
+        &mut self,
+        _arg: &OsStr,
+        _idx: usize,
+        _is_last: bool,
+    ) -> VisitPositionalResult<'_> {
         ControlFlow::Continue(())
     }
 
@@ -512,7 +517,7 @@ pub trait ParserStateDyn: 'static {
 pub trait Subcommand: Sized + 'static {
     const RAW_INFO: &'static RawSubcommandInfo = RawSubcommandInfo::EMPTY_REF;
 
-    fn feed_subcommand(_name: &OsStr) -> FeedSubcommand<Self> {
+    fn get_subcommand_parser(_name: &OsStr) -> SubcommandParserFn<Self> {
         None
     }
 
@@ -521,19 +526,19 @@ pub trait Subcommand: Sized + 'static {
         name: &OsStr,
         states: &mut dyn ParserChain,
     ) -> Result<Self> {
-        let Some(f) = Self::feed_subcommand(name) else {
+        let Some(f) = Self::get_subcommand_parser(name) else {
             return unknown_subcommand(name);
         };
         f(p, name, states)
     }
 }
 
-/// The fn signature of [`try_parse_state`], returned by [`Subcommand::feed_subcommand`].
-pub type FeedSubcommand<T> =
+/// The fn signature of [`try_parse_state`], returned by [`Subcommand::get_subcommand_parser`].
+pub type SubcommandParserFn<T> =
     Option<fn(p: &mut RawParser, subcmd: &OsStr, states: &mut dyn ParserChain) -> Result<T>>;
 
 #[cfg(test)]
-fn _assert_feed_subcommand_ty<S: ParserState>() -> FeedSubcommand<S::Output> {
+fn _assert_subcommand_parser_type<S: ParserState>() -> SubcommandParserFn<S::Output> {
     Some(try_parse_state::<S>)
 }
 
@@ -553,16 +558,17 @@ pub fn try_parse_state<S: ParserState>(
 fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result<()> {
     let mut buf = OsString::new();
 
-    let mut unnamed_idx = 0usize;
+    // The next index of positional arguments.
+    let mut positional_idx = 0usize;
 
     while let Some(arg) = p.next_arg(&mut buf)? {
         match arg {
             RawArg::EncodedNamed(enc_name, inline_value) => {
                 let args_info = chain.state.info();
-                let (place, mut attrs, args_info) = match chain.state.feed_named(enc_name) {
+                let (place, mut attrs, args_info) = match chain.state.visit_named(enc_name) {
                     ControlFlow::Break((place, attrs)) => (place, attrs, args_info),
                     ControlFlow::Continue(()) => {
-                        match chain.ancestors.feed_global_named(enc_name) {
+                        match chain.ancestors.visit_global_named(enc_name) {
                             ControlFlow::Break(ret) => ret,
                             ControlFlow::Continue(()) => {
                                 // TODO: Configurable help?
@@ -639,26 +645,28 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                         },
                     )?;
             }
-            RawArg::Unnamed(arg) => match chain.state.feed_unnamed(&arg, unnamed_idx, false) {
-                ControlFlow::Break((place, attrs)) => {
-                    unnamed_idx += 1;
-                    place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
+            RawArg::Positional(arg) => {
+                match chain.state.visit_positional(&arg, positional_idx, false) {
+                    ControlFlow::Break((place, attrs)) => {
+                        positional_idx += 1;
+                        place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
+                    }
+                    ControlFlow::Continue(()) => {
+                        return Err(ErrorKind::ExtraPositionalArgument.with_input(arg));
+                    }
                 }
-                ControlFlow::Continue(()) => {
-                    return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
-                }
-            },
+            }
             RawArg::DashDash => {
                 drop(arg);
                 drop(buf);
                 while let Some(arg) = p.iter.next() {
-                    match chain.state.feed_unnamed(&arg, unnamed_idx, true) {
+                    match chain.state.visit_positional(&arg, positional_idx, true) {
                         ControlFlow::Break((place, attrs)) => {
-                            unnamed_idx += 1;
+                            positional_idx += 1;
                             place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
                         }
                         ControlFlow::Continue(()) => {
-                            return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg));
+                            return Err(ErrorKind::ExtraPositionalArgument.with_input(arg));
                         }
                     }
                 }
@@ -681,7 +689,8 @@ enum RawArg<'a> {
     DashDash,
     /// Encoded arg name and an optional inline value.
     EncodedNamed(&'a str, RawInlineValue<'a>),
-    Unnamed(OsString),
+    /// A verbatim positional argument.
+    Positional(OsString),
 }
 
 #[derive(Debug)]
@@ -771,7 +780,7 @@ impl<'i> RawParser<'i> {
             self.next_short_idx = Some(NonZero::new(1).unwrap());
             self.next_arg(buf)
         } else {
-            Ok(Some(RawArg::Unnamed(std::mem::take(buf))))
+            Ok(Some(RawArg::Positional(std::mem::take(buf))))
         }
     }
 
