@@ -124,7 +124,7 @@ struct FieldInfo<'i> {
     value_ty: &'i syn::Type,
     value_parser: ValueParser<'i>,
 
-    // Arg configurables //
+    // Arg configurable //
     /// Encoded names for matching. Empty for positional arguments.
     enc_names: Vec<String>,
     attrs: ArgAttrs,
