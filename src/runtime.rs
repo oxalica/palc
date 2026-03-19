@@ -37,7 +37,7 @@ impl<T> ParserFlavor<T> for FallbackParserFlavor {
 
 /// Top-level parser for a single struct entry.
 ///
-/// It ignores the 0-th argument (argv[0]) and parsing arguments after.
+/// It ignores the 0-th argument (aka. `argv[0]`) and parsing arguments after.
 pub struct StructParserFlavor<A>(A);
 impl<A: Args> ParserFlavor<A> for StructParserFlavor<A> {
     fn run_parser(p: &mut RawParser, program_name: &OsStr) -> Result<A> {
