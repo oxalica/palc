@@ -33,8 +33,6 @@ palc-derive = { path = "./derive", version = "=0.0.2" }
 ref-cast = "1.0.24"
 
 [dev-dependencies]
-argh = { version = "0.1.13", default-features = false }
-clap = { version = "4.5.35", default-features = false, features = ["std", "derive", "error-context", "help", "usage"] }
 expect-test = "1.5.1"
 trybuild = { version = "1.0.108", features = ["diff"] }
 

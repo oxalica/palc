@@ -155,8 +155,6 @@ checksum = "63eceb7b5d757011a87d08eb2123db15d87fb0c281f65d101ce30a1e96c3ad5c"
 name = "palc"
 version = "0.0.2"
 dependencies = [
- "argh",
- "clap",
  "expect-test",
  "os_str_bytes",
  "palc-derive",
