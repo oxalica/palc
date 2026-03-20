@@ -1006,13 +1006,16 @@ impl ToTokens for RawArgsInfo<'_> {
 
         let fmt_fn = quote! {
             |__w, __what| {
-                // WAIT: Rust 1.89 in order to join `format_args` results and `write_fmt` once.
-                let _ = match __what {
-                    0u8 => __rt::fmt::Write::write_fmt(__w, #help_positional),
-                    1u8 => __rt::fmt::Write::write_fmt(__w, #help_named),
-                    2u8 => __rt::fmt::Write::write_fmt(__w, #usage_positional),
-                    _ => __rt::fmt::Write::write_fmt(__w, #usage_named),
+                // We cannot inline this variable, or clippy will complain.
+                // Workaround: <https://github.com/rust-lang/rust-clippy/issues/16736>
+                let __f = match __what {
+                    0u8 => #help_positional,
+                    1u8 => #help_named,
+                    2u8 => #usage_positional,
+                    _ => #usage_named,
                 };
+                // See `refl::FmtWriter`. The argument must be `&mut String` thus cannot fail.
+                let _ = __rt::fmt::Write::write_fmt(__w, __f);
             }
         };
 
