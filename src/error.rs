@@ -45,7 +45,6 @@ struct Inner {
 pub(crate) enum ErrorKind {
     // Input parsing errors.
     MissingArg0,
-    InvalidUtf8,
     UnknownNamedArgument,
     UnknownSubcommand,
     DuplicatedNamedArgument,
@@ -90,7 +89,6 @@ impl fmt::Display for Error {
 
         let fmt_args = match &e.kind {
             ErrorKind::MissingArg0 => format_args!("missing executable argument (argv[0])"),
-            ErrorKind::InvalidUtf8 => format_args!("invalid UTF-8 {input:?} for '{arg_desc}'"),
             ErrorKind::UnknownNamedArgument => format_args!("unexpected argument {input:?}"),
             ErrorKind::UnknownSubcommand => format_args!("unrecognized subcommand {input:?}"),
             ErrorKind::DuplicatedNamedArgument => {
@@ -106,28 +104,29 @@ impl fmt::Display for Error {
                 format_args!("a value is required for '{arg_desc}' but none was supplied")
             }
             ErrorKind::InvalidValue => {
-                struct PossibleValues<'a>(Option<&'a str>);
-                impl fmt::Display for PossibleValues<'_> {
-                    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                        let Some(strs) = self.0 else { return Ok(()) };
-                        f.write_str("\n  [possible values: ")?;
-                        let mut first = true;
-                        for s in split_terminator(strs, b'\0') {
-                            if first {
-                                first = false
-                            } else {
-                                f.write_str(", ")?
-                            }
-                            f.write_str(s)?;
-                        }
-                        f.write_str("]")
-                    }
+                // This output contains conditionals, thus cannot use `format_args`...
+
+                write!(f, "invalid value {input:?} for '{arg_desc}'")?;
+                if let Some(src_err) = &e.source {
+                    f.write_str(": ")?;
+                    src_err.fmt(f)?;
                 }
 
-                format_args!(
-                    "invalid value {input:?} for '{arg_desc}'{}",
-                    PossibleValues(e.possible_inputs_nul),
-                )
+                if let Some(strs) = e.possible_inputs_nul {
+                    f.write_str("\n  [possible values: ")?;
+                    let mut first = true;
+                    for s in split_terminator(strs, b'\0') {
+                        if first {
+                            first = false
+                        } else {
+                            f.write_str(", ")?
+                        }
+                        f.write_str(s)?;
+                    }
+                    f.write_str("]")?;
+                }
+
+                return Ok(());
             }
             ErrorKind::MissingEq => {
                 format_args!("equal sign is needed when assigning values for '{arg_desc}'")

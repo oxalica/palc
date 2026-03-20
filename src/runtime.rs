@@ -738,17 +738,22 @@ impl<'i> RawParser<'i> {
         #[cold]
         fn fail_on_next_short_arg(rest: &OsStr) -> Error {
             let bytes = rest.as_encoded_bytes();
+            let mut dash_arg = OsString::new();
+            // Add back the `-` prefix to signify this is parsed as a short named argument.
+            dash_arg.push("-");
 
             // UTF-8 length of a char must be 1..=4, len==1 case is checked outside.
             for len in 2..=bytes.len().min(4) {
                 if let Ok(s) = std::str::from_utf8(&bytes[..len]) {
-                    let mut dec_input = String::with_capacity(4);
-                    dec_input.push('-');
-                    dec_input.push_str(s);
-                    return ErrorKind::UnknownNamedArgument.with_input(dec_input.into());
+                    dash_arg.push(s);
+                    return ErrorKind::UnknownNamedArgument.with_input(dash_arg);
                 }
             }
-            ErrorKind::InvalidUtf8.with_input(rest.into())
+
+            // There is not a single valid UTF-8 char. Note that we cannot construct `OsStr` from `u8`.
+            // Just dump all the invalid data back to the user.
+            dash_arg.push(rest);
+            ErrorKind::UnknownNamedArgument.with_input(dash_arg)
         }
 
         if let Some(pos) = self.next_short_idx.filter(|pos| pos.get() < buf.len()) {
@@ -798,7 +803,7 @@ impl<'i> RawParser<'i> {
             let enc_name = if name.len() != 1 { name } else { buf.index(..3) };
             let enc_name = enc_name
                 .to_str()
-                .ok_or_else(|| ErrorKind::InvalidUtf8.with_input(enc_name.into()))?;
+                .ok_or_else(|| ErrorKind::UnknownNamedArgument.with_input(enc_name.into()))?;
             Ok(Some(RawArg::EncodedNamed(enc_name, inline_value)))
         } else if buf.starts_with("-") && buf.len() != 1 {
             self.next_short_idx = Some(NonZero::new(1).unwrap());

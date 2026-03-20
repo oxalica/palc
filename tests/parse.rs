@@ -390,7 +390,9 @@ fn help_non_utf8() {
 
     check_err::<Cli>(
         [OsString::new(), "--input".into(), OsString::from_vec(vec![b'a', 0xFF])],
-        expect![[r#"invalid UTF-8 "a\xFF" for '--input <INPUT>'"#]],
+        expect![[
+            r#"invalid value "a\xFF" for '--input <INPUT>': invalid utf-8 sequence of 1 bytes from index 1"#
+        ]],
     );
 }
 
@@ -406,7 +408,9 @@ fn help_control_char() {
 
     check_err::<Cli>(
         [OsString::new(), "--input".into(), "\x1B[31mcolorful\x1B[m".into()],
-        expect![[r#"invalid value "\u{1b}[31mcolorful\u{1b}[m" for '--input <INPUT>'"#]],
+        expect![[
+            r#"invalid value "\u{1b}[31mcolorful\u{1b}[m" for '--input <INPUT>': invalid digit found in string"#
+        ]],
     );
 }
 

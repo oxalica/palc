@@ -10,6 +10,10 @@ mod sealed {
     pub trait Sealed {}
 }
 
+#[cold]
+#[inline(always)]
+fn cold_path() {}
+
 /// Value types that are parsable from raw `&OsStr`.
 ///
 /// It behaves like a `clap::ValueParser` but in type-level.
@@ -75,12 +79,19 @@ impl<T: ValueEnum + 'static> ValueParser for ValueEnumParser<T> {
 
     fn parse(v: &OsStr) -> Result<T> {
         // TODO: better diagnostics?
-        v.to_str()
-            .ok_or(ErrorKind::InvalidUtf8)
-            .and_then(|s| T::parse_value(s).ok_or(ErrorKind::InvalidValue))
-            .map_err(|err| {
-                err.with_input(v.to_owned()).with_possible_values(T::POSSIBLE_INPUTS_NUL)
-            })
+        let src_err = match <&str>::try_from(v) {
+            Ok(s) => match T::parse_value(s) {
+                Some(value) => return Ok(value),
+                None => None,
+            },
+            Err(err) => Some(err.into()),
+        };
+        cold_path();
+        let mut err = ErrorKind::InvalidValue
+            .with_input(v.to_owned())
+            .with_possible_values(T::POSSIBLE_INPUTS_NUL);
+        err = if let Some(src) = src_err { err.with_source(src) } else { err };
+        Err(err)
     }
 }
 
@@ -102,8 +113,13 @@ where
 {
     type Output = T;
     fn parse(v: &OsStr) -> Result<T> {
-        T::try_from(v)
-            .map_err(|err| ErrorKind::InvalidValue.with_input(v.into()).with_source(err.into()))
+        match T::try_from(v) {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                cold_path();
+                Err(ErrorKind::InvalidValue.with_input(v.into()).with_source(err.into()))
+            }
+        }
     }
 }
 
@@ -125,11 +141,15 @@ where
 {
     type Output = T;
     fn parse(v: &OsStr) -> Result<T> {
-        let s = v.to_str().ok_or_else(|| ErrorKind::InvalidUtf8.with_input(v.into()))?;
-        let t = s
-            .parse::<T>()
-            .map_err(|err| ErrorKind::InvalidValue.with_input(s.into()).with_source(err.into()))?;
-        Ok(t)
+        let err = match <&str>::try_from(v) {
+            Ok(s) => match s.parse::<T>() {
+                Ok(value) => return Ok(value),
+                Err(err) => err.into(),
+            },
+            Err(err) => err.into(),
+        };
+        cold_path();
+        Err(ErrorKind::InvalidValue.with_input(v.to_owned()).with_source(err))
     }
 }
 
