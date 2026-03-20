@@ -5,7 +5,10 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use crate::runtime::{ParserChainNode, ParserState};
+use crate::{
+    runtime::{ParserChainNode, ParserState},
+    util::split_terminator,
+};
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
 /// This implies either `UserErr: std::error::Error` or it is string-like.
@@ -38,7 +41,7 @@ struct Inner {
     help: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorKind {
     // Input parsing errors.
     MissingArg0,
@@ -74,14 +77,7 @@ impl std::error::Error for Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let e = &*self.0;
-        let mut s = f.debug_struct("Error");
-        s.field("kind", &e.kind)
-            .field("arg_desc", &e.arg_desc)
-            .field("input", &e.input)
-            .field("source", &e.source)
-            .field("help", &e.help);
-        s.finish_non_exhaustive()
+        f.debug_struct("Error").field("message", &self.to_string()).finish_non_exhaustive()
     }
 }
 
@@ -89,112 +85,82 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let e = &*self.0;
 
-        let opt_input = |f: &mut fmt::Formatter<'_>| {
-            if let Some(input) = &e.input {
-                f.write_str(" '")?;
-                f.write_str(&input.to_string_lossy())?;
-                f.write_str("'")?;
-            }
-            Ok(())
-        };
-        let opt_arg = |f: &mut fmt::Formatter<'_>, with_for: bool| {
-            if let Some(desc) = &e.arg_desc {
-                f.write_str(if with_for { " for '" } else { " '" })?;
-                f.write_str(desc)?;
-                f.write_str("'")?;
-            }
-            Ok(())
-        };
-        let opt_for_arg = |f: &mut fmt::Formatter<'_>| opt_arg(f, true);
+        let input = e.input.as_deref().unwrap_or("<unknown>".as_ref());
+        let arg_desc = e.arg_desc.unwrap_or("<unknown argument>");
 
-        match &e.kind {
-            ErrorKind::MissingArg0 => f.write_str("missing executable argument (argv[0])"),
-            ErrorKind::InvalidUtf8 => {
-                f.write_str("invalid UTF-8")?;
-                opt_input(f)?;
-                opt_for_arg(f)
-            }
-            ErrorKind::UnknownNamedArgument => {
-                f.write_str("unexpected argument")?;
-                opt_input(f)
-            }
-            ErrorKind::UnknownSubcommand => {
-                f.write_str("unrecognized subcommand")?;
-                opt_input(f)
-            }
+        let fmt_args = match &e.kind {
+            ErrorKind::MissingArg0 => format_args!("missing executable argument (argv[0])"),
+            ErrorKind::InvalidUtf8 => format_args!("invalid UTF-8 {input:?} for '{arg_desc}'"),
+            ErrorKind::UnknownNamedArgument => format_args!("unexpected argument {input:?}"),
+            ErrorKind::UnknownSubcommand => format_args!("unrecognized subcommand {input:?}"),
             ErrorKind::DuplicatedNamedArgument => {
-                f.write_str("the argument")?;
-                opt_arg(f, false)?;
-                f.write_str(" cannot be used multiple times")
+                format_args!("the argument '{arg_desc}' cannot be used multiple times")
             }
             ErrorKind::ExtraPositionalArgument => {
-                f.write_str("unexpected argument")?;
-                opt_input(f)
+                format_args!("unexpected argument {input:?}")
             }
             ErrorKind::UnexpectedInlineValue => {
-                f.write_str("unexpected value")?;
-                opt_input(f)?;
-                opt_for_arg(f)
+                format_args!("unexpected value {input:?} for '{arg_desc}'")
             }
             ErrorKind::MissingValue => {
-                f.write_str("a value is required")?;
-                opt_for_arg(f)?;
-                f.write_str(" but none was supplied")
+                format_args!("a value is required for '{arg_desc}' but none was supplied")
             }
             ErrorKind::InvalidValue => {
-                f.write_str("invalid value")?;
-                opt_input(f)?;
-                opt_for_arg(f)?;
-                if let Some(strs) = e.possible_inputs_nul {
-                    f.write_str("\n  [possible values: ")?;
-                    let mut first = true;
-                    for s in strs.split_terminator('\0') {
-                        if first {
-                            first = false
-                        } else {
-                            f.write_str(", ")?
+                struct PossibleValues<'a>(Option<&'a str>);
+                impl fmt::Display for PossibleValues<'_> {
+                    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        let Some(strs) = self.0 else { return Ok(()) };
+                        f.write_str("\n  [possible values: ")?;
+                        let mut first = true;
+                        for s in split_terminator(strs, b'\0') {
+                            if first {
+                                first = false
+                            } else {
+                                f.write_str(", ")?
+                            }
+                            f.write_str(s)?;
                         }
-                        f.write_str(s)?;
+                        f.write_str("]")
                     }
-                    f.write_str("]")?;
                 }
-                Ok(())
+
+                format_args!(
+                    "invalid value {input:?} for '{arg_desc}'{}",
+                    PossibleValues(e.possible_inputs_nul),
+                )
             }
             ErrorKind::MissingEq => {
-                f.write_str("equal sign is needed when assigning values")?;
-                opt_for_arg(f)
+                format_args!("equal sign is needed when assigning values for '{arg_desc}'")
             }
 
             ErrorKind::MissingRequiredArgument => {
-                f.write_str("the argument")?;
-                opt_arg(f, false)?;
-                f.write_str(" is required but not provided")
+                format_args!("the argument '{arg_desc}' is required but not provided")
             }
             ErrorKind::MissingRequiredSubcommand => {
-                f.write_str("the subcommand is required but not provided")
+                format_args!("the subcommand is required but not provided")
                 // TODO: Possible subcommands.
             }
             ErrorKind::ConstraintRequired => {
-                f.write_str("the argument")?;
-                opt_arg(f, false)?;
-                f.write_str(" is required but not provided")
+                format_args!("the argument '{arg_desc}' is required but not provided")
             }
             ErrorKind::ConstraintExclusive => {
-                f.write_str("the argument")?;
-                opt_arg(f, false)?;
-                f.write_str(" cannot be used with one or more of the other specified arguments")
+                format_args!(
+                    "the argument '{arg_desc}' cannot be used with one or more of the other specified arguments"
+                )
             }
             ErrorKind::ConstraintConflict => {
-                f.write_str("the argument")?;
-                opt_arg(f, false)?;
                 // TODO: Conflict with what?
-                f.write_str(" cannot be used with some other arguments")
+                format_args!("the argument '{arg_desc}' cannot be used with some other arguments")
             }
 
-            ErrorKind::Help => f.write_str(e.help.as_deref().unwrap_or("help is not available")),
+            ErrorKind::Help => {
+                return f.write_str(e.help.as_deref().unwrap_or("help is not available"));
+            }
 
-            ErrorKind::Custom => self.0.source.as_ref().unwrap().fmt(f),
-        }
+            ErrorKind::Custom => return self.0.source.as_ref().unwrap().fmt(f),
+        };
+
+        f.write_fmt(fmt_args)
     }
 }
 

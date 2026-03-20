@@ -70,9 +70,9 @@ fn flag() {
         expect!["the argument '-v, --verbose' cannot be used multiple times"],
     );
 
-    check_err::<Cli>(["", "--verbose=9"], expect!["unexpected value '9' for '-v, --verbose'"]);
-    check_err::<Cli>(["", "-vd"], expect!["unexpected argument '-d'"]);
-    check_err::<Cli>(["", "-v="], expect!["unexpected value '' for '-v, --verbose'"]);
+    check_err::<Cli>(["", "--verbose=9"], expect![[r#"unexpected value "9" for '-v, --verbose'"#]]);
+    check_err::<Cli>(["", "-vd"], expect![[r#"unexpected argument "-d""#]]);
+    check_err::<Cli>(["", "-v="], expect![[r#"unexpected value "" for '-v, --verbose'"#]]);
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn option_option() {
     // `Option<Option<T>>` makes the argument and its value both optional.
     check(["", "--bar"], &Cli { foo: None, bar: Some(None) });
     // It never consume the next argument.
-    check_err::<Cli>(["", "--bar", "value"], expect!["unexpected argument 'value'"]);
+    check_err::<Cli>(["", "--bar", "value"], expect![[r#"unexpected argument "value""#]]);
 }
 
 #[test]
@@ -321,20 +321,23 @@ fn unknown_args() {
         sub: Sub,
     }
 
-    check_err::<Cli>(["", "--debug"], expect!["unexpected argument '--debug'"]);
-    check_err::<Cli>(["", "-d"], expect!["unexpected argument '-d'"]);
-    check_err::<Cli>(["", "-vd"], expect!["unexpected argument '-d'"]);
-    check_err::<Cli>(["", "-v坏"], expect!["unexpected argument '-坏'"]);
+    check_err::<Cli>(["", "--debug"], expect![[r#"unexpected argument "--debug""#]]);
+    check_err::<Cli>(["", "-d"], expect![[r#"unexpected argument "-d""#]]);
+    check_err::<Cli>(["", "-vd"], expect![[r#"unexpected argument "-d""#]]);
+    check_err::<Cli>(["", "-v坏"], expect![[r#"unexpected argument "-坏""#]]);
 
-    check_err::<Cli>(["", "path1", "path2"], expect!["unexpected argument 'path2'"]);
+    check_err::<Cli>(["", "path1", "path2"], expect![[r#"unexpected argument "path2""#]]);
 
-    check_err::<CliWithSub>(["", "path1", "path2"], expect!["unrecognized subcommand 'path2'"]);
-    check_err::<CliWithSub>(["", "sub", "path"], expect!["unexpected argument 'path'"]);
+    check_err::<CliWithSub>(
+        ["", "path1", "path2"],
+        expect![[r#"unrecognized subcommand "path2""#]],
+    );
+    check_err::<CliWithSub>(["", "sub", "path"], expect![[r#"unexpected argument "path""#]]);
 }
 
 #[cfg(unix)]
 #[test]
-fn non_utf8() {
+fn parse_non_utf8() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
     use std::path::PathBuf;
@@ -372,6 +375,41 @@ fn non_utf8() {
     check([OsString::new(), concat_os("-vc=", non_utf8())], &exp);
 }
 
+#[cfg(unix)]
+#[test]
+fn help_non_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    #[derive(Debug, Parser)]
+    struct Cli {
+        // FIXME: Positional args does not print location info.
+        #[arg(long)]
+        #[expect(dead_code)]
+        input: String,
+    }
+
+    check_err::<Cli>(
+        [OsString::new(), "--input".into(), OsString::from_vec(vec![b'a', 0xFF])],
+        expect![[r#"invalid UTF-8 "a\xFF" for '--input <INPUT>'"#]],
+    );
+}
+
+#[test]
+fn help_control_char() {
+    #[derive(Debug, Parser)]
+    struct Cli {
+        // FIXME: Positional args does not print location info.
+        #[arg(long)]
+        #[expect(dead_code)]
+        input: i32,
+    }
+
+    check_err::<Cli>(
+        [OsString::new(), "--input".into(), "\x1B[31mcolorful\x1B[m".into()],
+        expect![[r#"invalid value "\u{1b}[31mcolorful\u{1b}[m" for '--input <INPUT>'"#]],
+    );
+}
+
 #[test]
 fn global() {
     #[derive(Debug, PartialEq, Parser)]
@@ -398,7 +436,7 @@ fn global() {
     check(["", "-v", "empty"], &Cli { verbose: true, debug: None, sub: Sub2::Empty });
 
     // Not global.
-    check_err::<Cli>(["", "empty", "-v"], expect!["unexpected argument '-v'"]);
+    check_err::<Cli>(["", "empty", "-v"], expect![[r#"unexpected argument "-v""#]]);
 
     // TODO: Is this behavior expected?
     check(
@@ -495,7 +533,7 @@ fn trailing_args() {
         ["", "-d", "-1"],
         expect!["a value is required for '-d <DEBUG>' but none was supplied"],
     );
-    check_err::<No>(["", "-x"], expect!["unexpected argument '-x'"]);
+    check_err::<No>(["", "-x"], expect![[r#"unexpected argument "-x""#]]);
 
     check(["", "-d", "-1"], &Yes { any: vec![], debug: -1 });
     // TODO: check(["", "-x", "-d", "-1"], &Yes { any: vec!["-x".into(), "-d".into(), "-1".into()], debug: 0 });
@@ -567,5 +605,5 @@ fn empty_subcommand() {
     enum Subcmd {}
 
     check([""], &Cli { cmd: None });
-    check_err::<Cli>(["", ""], expect!["unrecognized subcommand ''"]);
+    check_err::<Cli>(["", ""], expect![[r#"unrecognized subcommand """#]]);
 }
