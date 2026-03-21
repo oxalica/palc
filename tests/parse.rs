@@ -1,5 +1,5 @@
 use expect_test::{Expect, expect};
-use palc::{Args, Parser, Subcommand};
+use palc::{Args, Parser, Subcommand, ValueEnum};
 use std::{ffi::OsString, fmt::Debug};
 
 #[derive(Debug, Parser)]
@@ -610,4 +610,40 @@ fn empty_subcommand() {
 
     check([""], &Cli { cmd: None });
     check_err::<Cli>(["", ""], expect![[r#"unrecognized subcommand """#]]);
+}
+
+#[test]
+fn value_enum() {
+    #[derive(Debug, ValueEnum, Default, PartialEq, Eq)]
+    enum Color {
+        #[default]
+        Auto,
+        Always,
+        Never,
+    }
+
+    #[derive(Debug, Parser, PartialEq)]
+    struct Cli {
+        #[arg(long, default_value_t)]
+        color: Color,
+    }
+
+    check([""], &Cli { color: Color::Auto });
+    check(["", "--color=always"], &Cli { color: Color::Always });
+    check(["", "--color", "never"], &Cli { color: Color::Never });
+
+    check_err::<Cli>(
+        ["", "--color"],
+        expect!["a value is required for '--color <COLOR>' but none was supplied"],
+    );
+    check_err::<Cli>(
+        ["", "--color=always", "--color=always"],
+        expect!["the argument '--color <COLOR>' cannot be used multiple times"],
+    );
+    check_err::<Cli>(
+        ["", "--color=all"],
+        expect![[r#"
+            invalid value "all" for '--color <COLOR>'
+              [possible values: always, auto, never]"#]],
+    );
 }

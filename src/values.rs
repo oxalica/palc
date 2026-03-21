@@ -1,9 +1,11 @@
 use std::ffi::OsStr;
+use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::str::FromStr;
 
 use crate::error::DynStdError;
+use crate::util::split_terminator;
 use crate::{ErrorKind, Result};
 
 mod sealed {
@@ -89,9 +91,27 @@ impl<T: ValueEnum + 'static> ValueParser for ValueEnumParser<T> {
         cold_path();
         let mut err = ErrorKind::InvalidValue
             .with_input(v.to_owned())
-            .with_possible_values(T::POSSIBLE_INPUTS_NUL);
+            .with_context(format_args!("{}", PossibleValues(T::POSSIBLE_INPUTS_NUL)));
         err = if let Some(src) = src_err { err.with_source(src) } else { err };
         Err(err)
+    }
+}
+
+struct PossibleValues(&'static str);
+
+impl fmt::Display for PossibleValues {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[possible values: ")?;
+        let mut first = true;
+        for v in split_terminator(self.0, b'\0') {
+            if first {
+                first = false;
+            } else {
+                f.write_str(", ")?;
+            }
+            f.write_str(v)?;
+        }
+        f.write_str("]")
     }
 }
 

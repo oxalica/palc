@@ -2,13 +2,10 @@
     not(feature = "default"),
     allow(dead_code, reason = "help generation code can be unused")
 )]
-use std::ffi::OsString;
 use std::fmt;
+use std::{ffi::OsString, fmt::Write};
 
-use crate::{
-    runtime::{ParserChainNode, ParserState},
-    util::split_terminator,
-};
+use crate::runtime::{ParserChainNode, ParserState};
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
 /// This implies either `UserErr: std::error::Error` or it is string-like.
@@ -34,8 +31,12 @@ struct Inner {
     input: Option<OsString>,
     /// The underlying source error, if there is any.
     source: Option<DynStdError>,
-    /// Possible value strings, terminated by NUL.
-    possible_inputs_nul: Option<&'static str>,
+
+    /// The message to be displayed between source error message and help.
+    ///
+    /// Used for contextual help messages collected during error bubbling,
+    /// eg. possible values, suggestions.
+    contextual_help: String,
 
     /// Rendered help message.
     help: Option<String>,
@@ -104,29 +105,7 @@ impl fmt::Display for Error {
                 format_args!("a value is required for '{arg_desc}' but none was supplied")
             }
             ErrorKind::InvalidValue => {
-                // This output contains conditionals, thus cannot use `format_args`...
-
-                write!(f, "invalid value {input:?} for '{arg_desc}'")?;
-                if let Some(src_err) = &e.source {
-                    f.write_str(": ")?;
-                    src_err.fmt(f)?;
-                }
-
-                if let Some(strs) = e.possible_inputs_nul {
-                    f.write_str("\n  [possible values: ")?;
-                    let mut first = true;
-                    for s in split_terminator(strs, b'\0') {
-                        if first {
-                            first = false
-                        } else {
-                            f.write_str(", ")?
-                        }
-                        f.write_str(s)?;
-                    }
-                    f.write_str("]")?;
-                }
-
-                return Ok(());
+                format_args!("invalid value {input:?} for '{arg_desc}'")
             }
             ErrorKind::MissingEq => {
                 format_args!("equal sign is needed when assigning values for '{arg_desc}'")
@@ -152,14 +131,26 @@ impl fmt::Display for Error {
                 format_args!("the argument '{arg_desc}' cannot be used with some other arguments")
             }
 
-            ErrorKind::Help => {
-                return f.write_str(e.help.as_deref().unwrap_or("help is not available"));
-            }
+            // Will be rendered at the end.
+            ErrorKind::Help => format_args!(""),
 
-            ErrorKind::Custom => return self.0.source.as_ref().unwrap().fmt(f),
+            ErrorKind::Custom => return fmt::Display::fmt(e.source.as_deref().unwrap(), f),
         };
 
-        f.write_fmt(fmt_args)
+        f.write_fmt(fmt_args)?;
+        if let Some(src_err) = e.source.as_deref() {
+            f.write_str(": ")?;
+            fmt::Display::fmt(src_err, f)?;
+        }
+        if !e.contextual_help.is_empty() {
+            f.write_str("\n  ")?;
+            f.write_str(&e.contextual_help)?;
+        }
+        if e.kind == ErrorKind::Help {
+            f.write_str(e.help.as_deref().unwrap_or("help is not available"))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -170,7 +161,7 @@ impl Error {
             arg_desc: None,
             input: None,
             source: None,
-            possible_inputs_nul: None,
+            contextual_help: String::new(),
             help: None,
         }))
     }
@@ -197,14 +188,14 @@ impl Error {
         self
     }
 
-    pub(crate) fn with_arg_desc(mut self, arg_desc: Option<&'static str>) -> Self {
-        self.0.arg_desc = arg_desc;
+    pub(crate) fn with_context(mut self, f: fmt::Arguments<'_>) -> Self {
+        // String write cannot fail.
+        self.0.contextual_help.write_fmt(f).unwrap();
         self
     }
 
-    pub(crate) fn with_possible_values(mut self, possible_inputs_nul: &'static str) -> Self {
-        self.0.possible_inputs_nul =
-            (!possible_inputs_nul.is_empty()).then_some(possible_inputs_nul);
+    pub(crate) fn with_arg_desc(mut self, arg_desc: Option<&'static str>) -> Self {
+        self.0.arg_desc = arg_desc;
         self
     }
 
