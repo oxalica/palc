@@ -1,7 +1,6 @@
 use std::ffi::OsStr;
 use std::fmt;
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::str::FromStr;
 
 use crate::error::DynStdError;
@@ -91,30 +90,33 @@ pub fn assert_impl_display_default_value<T: DisplayDefaultValue>(x: T) -> T {
     x
 }
 
-pub struct InferValueParser<T, Fuel>(pub PhantomData<(T, Fuel)>);
-
-impl<T, Fuel> Deref for InferValueParser<T, &Fuel> {
-    type Target = InferValueParser<T, Fuel>;
-    fn deref(&self) -> &Self::Target {
-        &InferValueParser(PhantomData)
-    }
+/// Deref-specialization for parser impl selection:
+/// prefer `ValueEnum`, then `TryFrom<&OsStr>`, finally `FromStr`.
+///
+/// We'll generate:
+/// `assert_auto_infer_value_parser_ok((&&&PhantomData::<$ty>).__palc_infer_value_parser())`
+pub trait InferValueParser<T> {
+    type Output;
+    fn __palc_infer_value_parser(self) -> Self::Output;
 }
 
 // This function is displayed in error message, thus describes itself in its name.
-
 pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
     p
 }
 
 // Level 3
 
-impl<T: ValueEnum + 'static> InferValueParser<T, &&&()> {
-    pub fn get(&self) -> impl ValueParser<Output = T> {
+impl<T: ValueEnum + 'static> InferValueParser<T> for &&&PhantomData<T> {
+    type Output = ValueEnumParser<T>;
+    fn __palc_infer_value_parser(self) -> Self::Output {
         ValueEnumParser(PhantomData)
     }
 }
-struct ValueEnumParser<T>(PhantomData<T>);
+
+pub struct ValueEnumParser<T>(PhantomData<T>);
 impl<T> sealed::Sealed for ValueEnumParser<T> {}
+#[diagnostic::do_not_recommend]
 impl<T: ValueEnum + 'static> ValueParser for ValueEnumParser<T> {
     type Output = T;
     const POSSIBLE_INPUTS_NUL: &'static str = T::POSSIBLE_INPUTS_NUL;
@@ -157,16 +159,19 @@ impl fmt::Display for PossibleValues {
 
 // Level 2
 
-impl<T> InferValueParser<T, &&()>
+impl<T> InferValueParser<T> for &&PhantomData<T>
 where
     T: for<'a> TryFrom<&'a OsStr, Error: Into<DynStdError>> + 'static,
 {
-    pub fn get(&self) -> impl ValueParser<Output = T> {
+    type Output = TryFromOsStrParser<T>;
+    fn __palc_infer_value_parser(self) -> Self::Output {
         TryFromOsStrParser(PhantomData)
     }
 }
-struct TryFromOsStrParser<T>(PhantomData<T>);
+
+pub struct TryFromOsStrParser<T>(PhantomData<T>);
 impl<T> sealed::Sealed for TryFromOsStrParser<T> {}
+#[diagnostic::do_not_recommend]
 impl<T> ValueParser for TryFromOsStrParser<T>
 where
     T: for<'a> TryFrom<&'a OsStr, Error: Into<DynStdError>> + 'static,
@@ -185,16 +190,19 @@ where
 
 // Level 1
 
-impl<T> InferValueParser<T, &()>
+impl<T> InferValueParser<T> for &PhantomData<T>
 where
     T: FromStr<Err: Into<DynStdError>> + 'static,
 {
-    pub fn get(&self) -> impl ValueParser<Output = T> {
+    type Output = FromStrParser<T>;
+    fn __palc_infer_value_parser(self) -> Self::Output {
         FromStrParser(PhantomData)
     }
 }
-struct FromStrParser<T>(PhantomData<T>);
+
+pub struct FromStrParser<T>(PhantomData<T>);
 impl<T> sealed::Sealed for FromStrParser<T> {}
+#[diagnostic::do_not_recommend]
 impl<T> ValueParser for FromStrParser<T>
 where
     T: FromStr<Err: Into<DynStdError>> + 'static,
@@ -218,9 +226,10 @@ where
 // For error reporting.
 // Since `ValueParser` is sealed and all implementations are private, this user type is guaranteed
 // to cause an unimplemented error on `ValueParser`.
-impl<T> InferValueParser<T, ()> {
-    pub fn get(&self) -> T {
-        unreachable!()
+impl<T> InferValueParser<T> for PhantomData<T> {
+    type Output = T;
+    fn __palc_infer_value_parser(self) -> Self::Output {
+        const { unreachable!() }
     }
 }
 
@@ -231,7 +240,7 @@ fn infer_value_parser() {
 
     macro_rules! infer {
         ($ty:ty) => {
-            InferValueParser::<$ty, &&&()>(PhantomData).get()
+            (&&&PhantomData::<$ty>).__palc_infer_value_parser()
         };
     }
 

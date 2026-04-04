@@ -39,7 +39,7 @@ pub fn strip_ty_ctor<'i>(ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
 pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
     quote! {
         const _: () = {
-            use ::palc::__private as __rt;
+            use ::palc::__private::{self as __rt, InferValueParser as _, InferDisplayDefaultValue as _};
             #tts
         };
     }

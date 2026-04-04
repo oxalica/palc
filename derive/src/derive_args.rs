@@ -148,8 +148,11 @@ struct ValueParser<'i>(&'i syn::Type);
 impl ToTokens for ValueParser<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ty = self.0;
+        // See also `palc::values::InferValueParser`.
         tokens.extend(quote_spanned! {ty.span()=>
-            __rt::assert_auto_infer_value_parser_ok(__rt::InferValueParser::<#ty, &&&()>(__rt::PhantomData).get())
+            __rt::assert_auto_infer_value_parser_ok(
+                (&&&__rt::PhantomData::<#ty>).__palc_infer_value_parser()
+            )
         });
     }
 }
