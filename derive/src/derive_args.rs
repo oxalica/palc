@@ -1012,16 +1012,16 @@ impl ToTokens for RawArgsInfo<'_> {
                 // There can be a lot of default values. Put this here rather than inlining below.
                 use __rt::InferDisplayDefaultValue as _;
 
-                // We cannot inline this variable, or clippy will complain.
-                // Workaround: <https://github.com/rust-lang/rust-clippy/issues/16736>
-                let __f = match __what {
-                    0u8 => #help_positional,
-                    1u8 => #help_named,
-                    2u8 => #usage_positional,
-                    _ => #usage_named,
+                // NB: Do not extract `write_fmt` call outside the match!
+                // There are several bugs that we may run into even after 1.89.
+                // Rustc bug: <https://github.com/rust-lang/rust/issues/145422>
+                // Clippy bug: <https://github.com/rust-lang/rust-clippy/issues/16736>
+                let _ = match __what {
+                    0u8 => __rt::fmt::Write::write_fmt(__w, #help_positional),
+                    1u8 => __rt::fmt::Write::write_fmt(__w, #help_named),
+                    2u8 => __rt::fmt::Write::write_fmt(__w, #usage_positional),
+                    _ =>   __rt::fmt::Write::write_fmt(__w, #usage_named),
                 };
-                // See `refl::FmtWriter`. The argument must be `&mut String` thus cannot fail.
-                let _ = __rt::fmt::Write::write_fmt(__w, __f);
             }
         };
 
