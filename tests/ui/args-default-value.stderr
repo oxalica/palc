@@ -1,0 +1,74 @@
+error[E0277]: the default value of `PathBuf` cannot be formatted
+  --> tests/ui/args-default-value.rs:22:29
+   |
+22 |     #[arg(default_value_t = "/".into())]
+   |                             ^^^ `PathBuf` does not implement trait `std::fmt::Display` or `palc::ValueEnum`
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `PathBuf`
+   = note: this argument has a default value via `arg(default_value_t)`, thus a `std::fmt::Display` implementation is required in order to render it in
+               the generated help message
+   = note: types defined with `derive(palc::ValueEnum)` will be automatically
+               recognized and does not need `Display` implementation
+   = note: required for `PathBuf` to implement `palc::values::DisplayDefaultValue`
+note: required by a bound in `assert_impl_display_default_value`
+  --> src/values.rs
+   |
+   | pub fn assert_impl_display_default_value<T: DisplayDefaultValue>(x: T) -> T {
+   |                                             ^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_impl_display_default_value`
+
+error[E0277]: the default value of `PathBuf` cannot be formatted
+  --> tests/ui/args-default-value.rs:27:20
+   |
+27 |     default_trait: PathBuf,
+   |                    ^^^^^^^ `PathBuf` does not implement trait `std::fmt::Display` or `palc::ValueEnum`
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `PathBuf`
+   = note: this argument has a default value via `arg(default_value_t)`, thus a `std::fmt::Display` implementation is required in order to render it in
+               the generated help message
+   = note: types defined with `derive(palc::ValueEnum)` will be automatically
+               recognized and does not need `Display` implementation
+   = note: required for `PathBuf` to implement `palc::values::DisplayDefaultValue`
+note: required by a bound in `assert_impl_display_default_value`
+  --> src/values.rs
+   |
+   | pub fn assert_impl_display_default_value<T: DisplayDefaultValue>(x: T) -> T {
+   |                                             ^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_impl_display_default_value`
+
+error[E0308]: mismatched types
+  --> tests/ui/args-default-value.rs:30:29
+   |
+30 |     #[arg(default_value_t = ())]
+   |                             ^^
+   |                             |
+   |                             expected `i32`, found `()`
+   |                             arguments to this method are incorrect
+   |
+help: the return type of this call is `()` due to the type of the argument passed
+  --> tests/ui/args-default-value.rs:30:29
+   |
+30 |     #[arg(default_value_t = ())]
+   |                             ^^ this argument influences the return type of `__palc_infer_display`
+note: method defined here
+  --> src/values.rs
+   |
+   |     fn __palc_infer_display(self, v: T) -> Self::Output;
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: `PathBuf` doesn't implement `std::fmt::Display`
+  --> tests/ui/args-default-value.rs:22:29
+   |
+ 3 | #[derive(palc::Args)]
+   |          ---------- in this macro invocation
+...
+22 |     #[arg(default_value_t = "/".into())]
+   |                             ^^^ `PathBuf` cannot be formatted with the default formatter; call `.display()` on it
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `PathBuf`
+   = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+   = note: call `.display()` or `.to_string_lossy()` to safely print paths, as they may contain non-Unicode data
+
+error[E0308]: mismatched types
+  --> tests/ui/args-default-value.rs:30:29
+   |
+30 |     #[arg(default_value_t = ())]
+   |                             ^^ expected `i32`, found `()`

@@ -52,7 +52,8 @@ pub mod __private {
     pub use std::{assert, concat, env, format_args, unimplemented, unreachable};
 
     pub use crate::values::{
-        InferValueParser, ValueEnum, ValueParser, assert_auto_infer_value_parser_ok,
+        InferDisplayDefaultValue, InferValueParser, ValueEnum, ValueParser,
+        assert_auto_infer_value_parser_ok, assert_impl_display_default_value,
     };
 
     pub use crate::refl::{RawArgsInfo, RawArgsInfoRef, RawSubcommandInfo};

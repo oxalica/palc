@@ -38,7 +38,7 @@ pub trait ValueParser: Sized + sealed::Sealed + 'static {
 
 /// This trait definition is not a public API, only the derive-macro is.
 #[doc(hidden)]
-pub trait ValueEnum: std::fmt::Display + Sized {
+pub trait ValueEnum: Sized {
     /// See [`ValueParser::POSSIBLE_INPUTS_NUL`].
     const POSSIBLE_INPUTS_NUL: &'static str = "";
 
@@ -46,9 +46,49 @@ pub trait ValueEnum: std::fmt::Display + Sized {
     /// This is required for `arg(ignore_case)`.
     const NO_UPPER_CASE: bool = true;
 
-    fn parse_value(_s: &str) -> Option<Self> {
-        None
+    fn parse_value(s: &str) -> Option<Self>;
+    fn display_value(&self) -> &'static str;
+}
+
+/// Deref-specialization for display impl of the default value:
+/// prefer `ValueEnum`, then fallback to `Display`.
+///
+/// We'll generate:
+/// `assert_impl_display_default_value(PhantomData::<$ty>.__palc_infer_display($expr))`
+/// The typecheck should fail on the bounds on the outmost function call, and trigger
+/// `on_unimplemented` on `DisplayDefaultValue`.
+pub trait InferDisplayDefaultValue<T> {
+    type Output;
+    fn __palc_infer_display(self, v: T) -> Self::Output;
+}
+impl<T: ValueEnum> InferDisplayDefaultValue<T> for PhantomData<T> {
+    type Output = &'static str;
+    fn __palc_infer_display(self, v: T) -> Self::Output {
+        v.display_value()
     }
+}
+impl<T> InferDisplayDefaultValue<T> for &PhantomData<T> {
+    type Output = T;
+    fn __palc_infer_display(self, v: T) -> Self::Output {
+        v
+    }
+}
+
+#[diagnostic::on_unimplemented(
+    message = "the default value of `{Self}` cannot be formatted",
+    label = "`{Self}` does not implement trait `std::fmt::Display` or `palc::ValueEnum`",
+    note = "this argument has a default value via `arg(default_value_t)`, thus \
+    a `std::fmt::Display` implementation is required in order to render it in
+    the generated help message",
+    note = "types defined with `derive(palc::ValueEnum)` will be automatically
+    recognized and does not need `Display` implementation"
+)]
+trait DisplayDefaultValue: fmt::Display {}
+impl<T: fmt::Display> DisplayDefaultValue for T {}
+
+#[expect(private_bounds, reason = "opaque to proc-macro")]
+pub fn assert_impl_display_default_value<T: DisplayDefaultValue>(x: T) -> T {
+    x
 }
 
 pub struct InferValueParser<T, Fuel>(pub PhantomData<(T, Fuel)>);
@@ -206,6 +246,9 @@ fn infer_value_parser() {
     impl ValueEnum for MyValueEnum {
         fn parse_value(_s: &str) -> Option<Self> {
             None
+        }
+        fn display_value(&self) -> &'static str {
+            unreachable!()
         }
     }
 

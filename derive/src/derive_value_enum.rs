@@ -19,11 +19,11 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
 
             tts.extend(wrap_anon_item(quote! {
                 #[automatically_derived]
-                impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {}
-
-                #[automatically_derived]
-                impl #impl_generics __rt::fmt::Display for #name #ty_generics #where_clause {
-                    fn fmt(&self, _: &mut __rt::fmt::Formatter<'_>) -> __rt::fmt::Result {
+                impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {
+                    fn parse_value(_: &__rt::str) -> __rt::Option<Self> {
+                        __rt::unimplemented!()
+                    }
+                    fn display_value(&self) -> &'static __rt::str {
                         __rt::unimplemented!()
                     }
                 }
@@ -112,16 +112,12 @@ impl ToTokens for ValueEnumImpl<'_> {
                         _ => return __rt::None
                     })
                 }
-            }
 
-            #[automatically_derived]
-            impl #impl_generics __rt::fmt::Display for #name #ty_generics #where_clause {
-                // If there is no variant.
-                #[allow(unreachable_code)]
-                fn fmt(&self, __f: &mut __rt::fmt::Formatter<'_>) -> __rt::fmt::Result {
-                    __f.write_str(match *self {
+                fn display_value(&self) -> &'static __rt::str {
+                    // NB: Deref here is mandatory, otherwise rustc cannot reason about uninhabitable enums.
+                    match *self {
                         #(Self:: #variant_idents2 => #variant_strs2,)*
-                    })
+                    }
                 }
             }
         });

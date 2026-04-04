@@ -87,10 +87,6 @@ pub fn parse_default_str<P: ValueParser>(s: &str, _: P) -> Result<P::Output> {
     P::parse(s.as_ref())
 }
 
-pub fn assert_impl_display_for_help<T: std::fmt::Display>(x: T) -> T {
-    x
-}
-
 // TODO: Check inlining behavior is expected.
 pub fn unknown_subcommand<T>(name: &OsStr) -> Result<T> {
     Err(ErrorKind::UnknownSubcommand.with_input(name.into()))

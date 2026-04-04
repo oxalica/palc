@@ -1006,6 +1006,9 @@ impl ToTokens for RawArgsInfo<'_> {
 
         let fmt_fn = quote! {
             |__w, __what| {
+                // There can be a lot of default values. Put this here rather than inlining below.
+                use __rt::InferDisplayDefaultValue as _;
+
                 // We cannot inline this variable, or clippy will complain.
                 // Workaround: <https://github.com/rust-lang/rust-clippy/issues/16736>
                 let __f = match __what {
@@ -1081,12 +1084,15 @@ impl FormatArgsBuilder {
 
         if let Some(default) = &f.default_value {
             self.template.push_str("          [default: ");
+            let value_ty = f.value_ty;
             let arg: &dyn ToTokens = match default {
                 DefaultValue::ParseStr(s) => s,
-                DefaultValue::ValueExpr(e) => {
-                    let value_ty = f.value_ty;
-                    &quote_spanned! {e.span()=> __rt::assert_impl_display_for_help::<#value_ty>(#e) }
-                }
+                // See also: `palc::values::InferDisplayDefaultValue`
+                DefaultValue::ValueExpr(e) => &quote_spanned! {e.span()=>
+                    __rt::assert_impl_display_default_value(
+                        __rt::PhantomData::<#value_ty>.__palc_infer_display(#e)
+                    )
+                },
             };
             self.push_arg(arg);
             self.template.push_str("]\n");

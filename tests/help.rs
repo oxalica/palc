@@ -1,7 +1,7 @@
 #![cfg(feature = "help")]
 #![expect(dead_code, reason = "only for help generation")]
 use expect_test::{Expect, expect};
-use palc::{Args, Parser, Subcommand};
+use palc::{Args, Parser, Subcommand, ValueEnum};
 
 /// My great app.
 #[derive(Parser)]
@@ -10,8 +10,25 @@ struct ArgsCli {
     #[arg(short = 'v')]
     verbose: bool,
 
+    #[arg(long, default_value_t)]
+    color: Color,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Default, ValueEnum)]
+enum Color {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl std::fmt::Display for Color {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unreachable!("should prefer `ValueEnum` instead of this")
+    }
 }
 
 #[derive(Subcommand)]
@@ -73,6 +90,9 @@ fn top_level() {
             Options:
               -v
                       Log more details.
+
+                  --color <COLOR>
+                      [default: auto]
 
         "#]],
     );
