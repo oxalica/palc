@@ -989,6 +989,18 @@ impl ToTokens for RawArgsInfo<'_> {
                 }
             }
         }
+        for ty in self.0.flatten_tys() {
+            // FIXME: Should we `let` bind these very long expressions?
+            let help = quote! {
+                <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.help()
+            };
+            // Magic integers are documented at `palc::refl::RawArgsInfo::help`.
+            usage_named.push_custom_arg("{:.0}", &help);
+            usage_positional.push_custom_arg("{:.1}", &help);
+            help_named.push_custom_arg("{:.2}", &help);
+            help_positional.push_custom_arg("{:.3}", &help);
+        }
+
         if let Some(f) = &self.0.variable_num_field
             && !f.hide
         {
@@ -1007,23 +1019,30 @@ impl ToTokens for RawArgsInfo<'_> {
             help_positional.maybe_push_help_for(f);
         }
 
-        let fmt_fn = quote! {
-            |__w, __what| {
-                // There can be a lot of default values. Put this here rather than inlining below.
-                use __rt::InferDisplayDefaultValue as _;
+        let help_display = quote! {{
+            struct Help;
+            impl __rt::fmt::Display for Help {
+                fn fmt(&self, __f: &mut __rt::fmt::Formatter<'_>) -> __rt::fmt::Result {
+                    // There can be a lot of default values. Put this here rather than inlining below.
+                    use __rt::InferDisplayDefaultValue as _;
 
-                // NB: Do not extract `write_fmt` call outside the match!
-                // There are several bugs that we may run into even after 1.89.
-                // Rustc bug: <https://github.com/rust-lang/rust/issues/145422>
-                // Clippy bug: <https://github.com/rust-lang/rust-clippy/issues/16736>
-                let _ = match __what {
-                    0u8 => __rt::fmt::Write::write_fmt(__w, #help_positional),
-                    1u8 => __rt::fmt::Write::write_fmt(__w, #help_named),
-                    2u8 => __rt::fmt::Write::write_fmt(__w, #usage_positional),
-                    _ =>   __rt::fmt::Write::write_fmt(__w, #usage_named),
-                };
+                    // NB: Do not extract `write_fmt` call outside the match!
+                    // There are several bugs that we may run into even after 1.89.
+                    // Rustc bug: <https://github.com/rust-lang/rust/issues/145422>
+                    // Clippy bug: <https://github.com/rust-lang/rust-clippy/issues/16736>
+                    match __f.precision().unwrap_or(0) {
+                        // The integer mapping is documented at `palc::refl::RawArgsInfo::help`.
+                        0 => __f.write_fmt(#usage_named),
+                        1 => __f.write_fmt(#usage_positional),
+                        2 => __f.write_fmt(#help_named),
+                        _ => __f.write_fmt(#help_positional),
+                    }
+                }
             }
-        };
+
+
+            &Help
+        }};
 
         let descs = self.0.direct_fields().flat_map(|f| [&f.description, "\0"]).collect::<String>();
 
@@ -1046,7 +1065,7 @@ impl ToTokens for RawArgsInfo<'_> {
                 #subcmd_info,
                 #cmd_doc,
                 #descs,
-                #fmt_fn,
+                #help_display,
                 [
                     #(__rt::RawArgsInfoRef(
                         <<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO
@@ -1065,7 +1084,11 @@ struct FormatArgsBuilder {
 
 impl FormatArgsBuilder {
     fn push_arg(&mut self, tts: impl ToTokens) {
-        self.template.push_str("{}");
+        self.push_custom_arg("{}", tts);
+    }
+
+    fn push_custom_arg(&mut self, template: &str, tts: impl ToTokens) {
+        self.template.push_str(template);
         self.args.extend(quote! { , });
         tts.to_tokens(&mut self.args);
     }

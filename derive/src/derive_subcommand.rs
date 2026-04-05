@@ -218,7 +218,7 @@ impl ToTokens for UnitVariantStateImpl<'_> {
                     __rt::None,
                     #cmd_doc,
                     "",
-                    |_, _| {},
+                    &"",
                     [],
                 );
 

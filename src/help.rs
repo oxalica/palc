@@ -1,7 +1,6 @@
-use crate::{
-    refl::{FMT_NAMED, FMT_UNNAMED, FMT_USAGE_NAMED, FMT_USAGE_UNNAMED, RawArgsInfo},
-    runtime::ParserChainNode,
-};
+use std::fmt::Write;
+
+use crate::{refl::RawArgsInfo, runtime::ParserChainNode};
 
 #[inline(never)]
 fn push_str(out: &mut String, s: &str) {
@@ -57,14 +56,16 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         w!(" ", cmd);
     }
 
-    let fmt = |out: &mut String, what: u8| info.fmt_help(out, what);
-
     // TODO: Global args.
-    fmt(out, FMT_USAGE_NAMED);
-    if info.has_optional_named() {
-        w!(" [OPTIONS]");
-    }
-    fmt(out, FMT_USAGE_UNNAMED);
+    _ = std::fmt::write(
+        out,
+        format_args!(
+            "{:.0}{}{:.1}",
+            info.help(),
+            if info.has_optional_named() { " [OPTIONS]" } else { "" },
+            info.help(),
+        ),
+    );
 
     let subcmds = info.subcommands();
     if subcmds.is_some() {
@@ -101,7 +102,8 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         let last = out.len();
         w!("Arguments:\n");
         let banner = out.len();
-        fmt(out, FMT_UNNAMED);
+        // 3: Positional argument long help.
+        _ = write!(out, "{:.3}", info.help());
         if out.len() == banner {
             out.truncate(last);
         }
@@ -113,7 +115,8 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
         let last = out.len();
         w!("Options:\n");
         let banner = out.len();
-        fmt(out, FMT_NAMED);
+        // 2: Named argument long help.
+        _ = write!(out, "{:.2}", info.help());
         if out.len() == banner {
             out.truncate(last);
         }

@@ -49,24 +49,10 @@ impl RawSubcommandInfo {
     }
 }
 
-/// - `w` will always be a `&mut String` but type-erased to avoid aggressive
-///   inlining (reserve, fail handling, inlined memcpy).
-/// - `what` indicates what to format, see constants below.
-type FmtWriter = fn(w: &mut dyn fmt::Write, what: u8);
-
-const fn fmt_noop(_w: &mut dyn fmt::Write, _what: u8) {}
-
-// This should be an enum but we use numbers to simplify proc-macro codegen.
-pub(crate) const FMT_UNNAMED: u8 = 0;
-pub(crate) const FMT_NAMED: u8 = 1;
-pub(crate) const FMT_USAGE_UNNAMED: u8 = 2;
-pub(crate) const FMT_USAGE_NAMED: u8 = 3;
-
 // Break the type cycle.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct RawArgsInfoRef(pub &'static RawArgsInfo);
 
-#[derive(Debug)]
 pub struct RawArgsInfo<A: ?Sized = [RawArgsInfoRef]> {
     /// Zero or more '\0'-terminated argument descriptions, either:
     /// `-s`, `--long`, `-s, --long=<VALUE>`, `<REQUIRED>`, or `[OPTIONAL]`.
@@ -93,15 +79,21 @@ pub struct RawArgsInfo<A: ?Sized = [RawArgsInfoRef]> {
     cmd_doc: &'static str,
 
     /// Help string formatter.
+    ///
+    /// This is a mix of multiple part-formatters and is selected by precision flag.
+    /// - `{:.0}`: Named argument usage, with leading space.
+    /// - `{:.1}`: Positional argument usage, with leading space.
+    /// - `{:.2}`: Named argument long help.
+    /// - `{:.3}`: Positional argument long help.
     #[cfg(feature = "help")]
-    fmt_help: FmtWriter,
+    help: &'static dyn fmt::Display,
 
     flattened: A,
 }
 
 impl RawArgsInfo {
     pub(crate) const EMPTY_REF: &'static Self =
-        &RawArgsInfo::new(false, false, None, "", "", fmt_noop, []);
+        &RawArgsInfo::new(false, false, None, "", "", &"", []);
 
     // Used by proc-macro.
     pub const fn new<const N: usize>(
@@ -110,7 +102,7 @@ impl RawArgsInfo {
         subcmd_info: Option<&'static RawSubcommandInfo>,
         cmd_doc: &'static str,
         descriptions: &'static str,
-        fmt_help: FmtWriter,
+        help: &'static dyn fmt::Display,
         flattened: [RawArgsInfoRef; N],
     ) -> RawArgsInfo<[RawArgsInfoRef; N]> {
         #[cfg(feature = "help")]
@@ -136,7 +128,7 @@ impl RawArgsInfo {
             #[cfg(feature = "help")]
             cmd_doc,
             #[cfg(feature = "help")]
-            fmt_help,
+            help,
 
             flattened,
         }
@@ -179,11 +171,15 @@ impl RawArgsInfo {
         self.has_optional_named
     }
 
-    #[cfg(feature = "help")]
-    pub(crate) fn fmt_help(&self, w: &mut dyn fmt::Write, what: u8) {
-        (self.fmt_help)(w, what);
-        for f in &self.flattened {
-            f.0.fmt_help(w, what);
+    // Used by proc-macro for composing `help` that contains sub-args.
+    pub fn help(&self) -> &'static dyn fmt::Display {
+        #[cfg(feature = "help")]
+        {
+            self.help
+        }
+        #[cfg(not(feature = "help"))]
+        {
+            &""
         }
     }
 

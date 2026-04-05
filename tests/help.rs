@@ -1,5 +1,7 @@
 #![cfg(feature = "help")]
 #![expect(dead_code, reason = "only for help generation")]
+use std::path::PathBuf;
+
 use expect_test::{Expect, expect};
 use palc::{Args, Parser, Subcommand, ValueEnum};
 
@@ -13,8 +15,18 @@ struct ArgsCli {
     #[arg(long, default_value_t)]
     color: Color,
 
+    #[command(flatten)]
+    flatten: Flatten,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Args)]
+struct Flatten {
+    /// The main config file path.
+    #[arg(long)]
+    config_file: PathBuf,
 }
 
 #[derive(Default, ValueEnum)]
@@ -80,7 +92,7 @@ fn top_level() {
         expect![[r#"
             My great app.
 
-            Usage: me [OPTIONS] <COMMAND>
+            Usage: me --config-file <CONFIG_FILE> [OPTIONS] <COMMAND>
 
             Commands:
                 run     Run the app.
@@ -93,6 +105,9 @@ fn top_level() {
 
                   --color <COLOR>
                       [default: auto]
+
+                  --config-file <CONFIG_FILE>
+                      The main config file path.
 
         "#]],
     );
