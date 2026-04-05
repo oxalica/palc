@@ -4,7 +4,7 @@ use std::num::NonZero;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Fields, FieldsNamed, Ident, LitChar, LitStr, Visibility};
+use syn::{Data, DeriveInput, Fields, FieldsNamed, Ident, Lit, LitChar, LitStr, Visibility};
 
 use crate::common::{
     ArgOrCommand, ArgsCommandMeta, CommandMeta, Doc, FieldPath, Override, TY_BOOL, TY_OPTION,
@@ -1114,11 +1114,26 @@ impl FormatArgsBuilder {
             let arg: &dyn ToTokens = match default {
                 DefaultValue::ParseStr(s) => s,
                 // See also: `palc::values::InferDisplayDefaultValue`
-                DefaultValue::ValueExpr(e) => &quote_spanned! {e.span()=>
-                    __rt::assert_impl_display_default_value(
-                        __rt::PhantomData::<#value_ty>.__palc_infer_display(#e)
-                    )
-                },
+                DefaultValue::ValueExpr(e) => {
+                    // Optimization: For literal defaults that are known
+                    // to be `Display`, commonly integers, pass them directly
+                    // without any wrappers. So they can be inlined by rustc
+                    // `format_args` optimization.
+                    // The default type checking will still happen inside
+                    // `finish`, so skipping this check does not matter.
+                    if let Ok(
+                        Lit::Bool(_) | Lit::Byte(_) | Lit::Char(_) | Lit::Float(_) | Lit::Int(_),
+                    ) = syn::parse2::<Lit>(e.clone())
+                    {
+                        e
+                    } else {
+                        &quote_spanned! {e.span()=>
+                            __rt::assert_impl_display_default_value(
+                                __rt::PhantomData::<#value_ty>.__palc_infer_display(#e)
+                            )
+                        }
+                    }
+                }
             };
             self.push_arg(arg);
             self.template.push_str("]\n");
