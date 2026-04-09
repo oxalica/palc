@@ -1,5 +1,4 @@
-//! TODO: This triggers are many duplicated errors. Could be improved, but blocked on rustc.
-//! WAIT: <https://github.com/rust-lang/rust/issues/144745>
+//! TODO: The error message mentions `__private` which is suboptimal.
 
 #[derive(palc::Args)]
 struct Cli1 {

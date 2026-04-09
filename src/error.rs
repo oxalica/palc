@@ -5,7 +5,8 @@
 use std::fmt;
 use std::{ffi::OsString, fmt::Write};
 
-use crate::runtime::{ParserChainNode, ParserState};
+use crate::refl::RawArgsInfo;
+use crate::runtime::ArgsFrame;
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
 /// This implies either `UserErr: std::error::Error` or it is string-like.
@@ -200,15 +201,15 @@ impl Error {
     }
 
     #[cfg(not(feature = "help"))]
-    pub(crate) fn maybe_render_help(self, _chain: &mut ParserChainNode) -> Self {
+    pub(crate) fn maybe_render_help(self, _: &ArgsFrame) -> Self {
         self
     }
 
     #[cfg(feature = "help")]
-    pub(crate) fn maybe_render_help(mut self, chain: &mut ParserChainNode) -> Self {
+    pub(crate) fn maybe_render_help(mut self, frame: &ArgsFrame) -> Self {
         if self.0.kind == ErrorKind::Help {
             let out = self.0.help.insert(String::new());
-            crate::help::render_help_into(out, chain);
+            crate::help::render_help_into(out, frame);
         }
         self
     }
@@ -230,8 +231,9 @@ impl ErrorKind {
     }
 
     #[cold]
-    pub(crate) fn with_arg_idx<S: ParserState>(self, arg_idx: u8) -> Error {
-        let desc = S::RAW_ARGS_INFO.get_description(arg_idx);
-        Error::new(self).with_arg_desc(desc)
+    pub(crate) fn with_arg_idx(self, info: &RawArgsInfo, idx: u8) -> Error {
+        let mut err = Error::new(self);
+        err.0.arg_desc = info.get_description(idx);
+        err
     }
 }

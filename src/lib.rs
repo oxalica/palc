@@ -56,7 +56,7 @@ pub mod __private {
         assert_auto_infer_value_parser_ok, assert_impl_display_default_value,
     };
 
-    pub use crate::refl::{RawArgsInfo, RawArgsInfoRef, RawSubcommandInfo};
+    pub use crate::refl::{RawArgsInfo, RawSubcommandInfo};
     pub use crate::shared::ArgAttrs;
     pub use crate::{Parser, Result};
 }

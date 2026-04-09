@@ -1,46 +1,21 @@
 use std::fmt::Write;
 
-use crate::{refl::RawArgsInfo, runtime::ParserChainNode};
+use crate::runtime::{ArgsFrame, Frame};
 
 #[inline(never)]
 fn push_str(out: &mut String, s: &str) {
     out.push_str(s);
 }
 
-fn collect_subcmds(out: &mut Vec<(String, &'static RawArgsInfo)>, chain: ParserChainNode) {
-    let info = chain.state.info();
-    let cmd_name = chain.cmd_name.to_string_lossy().into_owned();
-    out.push((cmd_name, info));
-    if let Some(deep) = chain.ancestors.out() {
-        collect_subcmds(out, deep);
-    }
-}
-
 #[cold]
-pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
+pub(crate) fn render_help_into(out: &mut String, frame: &ArgsFrame) {
     macro_rules! w {
         ($($e:expr),*) => {{
             $(push_str(out, $e);)*
         }};
     }
 
-    let path = {
-        let mut path = Vec::with_capacity(8);
-        collect_subcmds(
-            &mut path,
-            ParserChainNode {
-                cmd_name: chain.cmd_name,
-                state: chain.state,
-                ancestors: chain.ancestors,
-            },
-        );
-        path.reverse();
-        path
-    };
-
-    // There must be at least a top-level `Parser` info, or we would fail fast by `MissingArg0`.
-    assert!(!path.is_empty());
-    let info = path.last().unwrap().1;
+    let info = frame.info;
 
     // About this (sub)command.
     let doc = info.doc();
@@ -51,10 +26,7 @@ pub(crate) fn render_help_into(out: &mut String, chain: &mut ParserChainNode) {
     // Usage of current subcommand path.
 
     w!("Usage:");
-    // Argv0 is included.
-    for (cmd, _) in path.iter() {
-        w!(" ", cmd);
-    }
+    frame.collect_command_prefix(out);
 
     // TODO: Global args.
     _ = std::fmt::write(

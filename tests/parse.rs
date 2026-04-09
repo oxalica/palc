@@ -571,13 +571,15 @@ fn constraint() {
         level: Option<u8>,
     }
 
-    check_err::<Required>([""], expect!["the argument '<FILES>...' is required but not provided"]);
+    // Note: The validation order is unspecified, so any error message is okay here.
+    check_err::<Required>([""], expect!["the argument '--key <KEY>' is required but not provided"]);
+
     check_err::<Required>(
-        ["", "--key=foo"],
+        ["", "--key=foo", "-f", "-l2"],
         expect!["the argument '<FILES>...' is required but not provided"],
     );
     check_err::<Required>(
-        ["", "--key=foo", "path"],
+        ["", "--key=foo", "path", "-l2"],
         expect!["the argument '-f' is required but not provided"],
     );
     check_err::<Required>(

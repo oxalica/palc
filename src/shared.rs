@@ -54,11 +54,18 @@ impl ArgAttrs {
     pub const GLOBAL: Self = Self(1 << 20);
     /// Make the value lowercase before parsing it?
     pub const MAKE_LOWERCASE: Self = Self(1 << 21);
-    /// Is this a greedy variable-length positional that consumes everything after?
-    pub const GREEDY: Self = Self(1 << 22);
+    /// Is this a variable-length positional argument that consumes indetermined
+    /// number of arguments?
+    /// NB: This differs from clap's `trailing_var_arg` which is similar to `GREEDY`.
+    pub const VAR_ARG: Self = Self(1 << 22);
+    /// `VAR_ARG` but in addition also bypasses subcommand check and `-`-prefix check.
+    /// This always completely drains the whole input iterator once encountered.
+    pub const GREEDY: Self = Self(1 << 23);
+    /// Is this the positional argument that is only accessible through `--`?
+    pub const LAST: Self = Self(1 << 24);
     /// Is an inlined value provided?
     /// This flag is only set by the parser runtime to inform the place implementation.
-    pub const HAS_INLINE_VALUE: Self = Self(1 << 23);
+    pub const HAS_INLINE_VALUE: Self = Self(1 << 25);
 
     pub fn set(&mut self, other: Self, value: bool) {
         if value {

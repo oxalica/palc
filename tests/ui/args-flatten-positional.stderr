@@ -2,4 +2,4 @@ error[E0080]: evaluation panicked: TODO: cannot arg(flatten) positional argument
  --> tests/ui/args-flatten-positional.rs:6:12
   |
 6 |     inner: Inner,
-  |            ^^^^^ evaluation of `_` failed here
+  |            ^^^^^ evaluation of `_::<impl palc::__private::Args for Outer>::__parse::_` failed here

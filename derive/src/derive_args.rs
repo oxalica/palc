@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::num::NonZero;
 
 use proc_macro2::{Span, TokenStream};
-use quote::{ToTokens, format_ident, quote, quote_spanned};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Fields, FieldsNamed, Ident, Lit, LitChar, LitStr, Visibility};
+use syn::{Data, DeriveInput, Fields, FieldsNamed, Ident, Lit, LitChar, LitStr};
 
 use crate::common::{
-    ArgOrCommand, ArgsCommandMeta, CommandMeta, Doc, FieldPath, Override, TY_BOOL, TY_OPTION,
+    ArgOrCommand, ArgsCommandMeta, CommandMeta, Doc, FieldIdent, Override, TY_BOOL, TY_OPTION,
     TY_VEC, strip_ty_ctor, wrap_anon_item,
 };
 use crate::error::{Result, catch_errors};
@@ -34,7 +34,15 @@ fn fallback(ident: &Ident) -> TokenStream {
     quote! {
         #[automatically_derived]
         impl __rt::Args for #ident {
-            type __State = __rt::FallbackState<#ident>;
+            const __HAS_SUBCOMMAND: __rt::bool = false;
+            const __INFO: &'static __rt::RawArgsInfo = __rt::RawArgsInfo::EMPTY_REF;
+            extern "C" fn __parse(
+                _: &mut __rt::Option<Self>,
+                _: &mut dyn __rt::Frame,
+                _: &mut dyn __rt::RunParser,
+            ) -> __rt::Result<()> {
+                __rt::unimplemented!()
+            }
         }
     }
 }
@@ -45,38 +53,44 @@ pub fn try_expand_for_named_struct(
 ) -> Result<TokenStream> {
     let ident = &input.ident;
     let cmd_meta = CommandMeta::parse_attrs_opt(&input.attrs);
-    let state_name = format_ident!("{}State", input.ident);
     let struct_name = input.ident.to_token_stream();
-    let state =
-        expand_state_def_impl(&input.vis, cmd_meta.as_deref(), state_name, struct_name, fields)?;
-    let state_name = &state.state_name;
+    let parse = expand_args_parse(cmd_meta.as_deref(), struct_name, fields)?;
+    let args_info = parse.args_info();
+    let has_subcmd = parse.subcommand.is_some();
 
     Ok(quote! {
-        #state
-
         #[automatically_derived]
         impl __rt::Args for #ident {
-            type __State = #state_name;
+            const __HAS_SUBCOMMAND: __rt::bool = #has_subcmd;
+            const __INFO: &'static __rt::RawArgsInfo = #args_info;
+            extern "C" fn __parse(
+                __out: &mut __rt::Option<Self>,
+                __frame: &mut dyn __rt::Frame,
+                __parser: &mut dyn __rt::RunParser,
+            ) -> __rt::Result<()> {
+                let __info = <Self as __rt::Args>::__INFO;
+                #parse
+            }
         }
     })
 }
 
-pub struct ParserStateDefImpl<'i> {
-    pub vis: &'i Visibility,
-    pub state_name: Ident,
-    pub output_ty: TokenStream,
-    pub output_ctor: Option<TokenStream>,
+/// Generate the body of `Args::__parse`.
+///
+/// Referenced variables: `__out`, `__frame`, `__parser`, `__info`.
+pub struct ArgsParse<'i> {
+    pub output_ctor: TokenStream,
 
-    named_fields: Vec<FieldInfo<'i>>,
-    positional_fields: Vec<FieldInfo<'i>>,
-    /// The positional argument that takes a variable number of raw input arguments.
-    variable_num_field: Option<FieldInfo<'i>>,
-    /// The last argument that accepts only after `--`.  Since it's after `--`,
-    /// it is always greedy and skips subcommand or named argument handling.
-    last_field: Option<FieldInfo<'i>>,
+    /// This contains all "direct" argument fields, that is, everything
+    /// excluding subcommand and flattened ones.
+    /// They are sorted in this order:
+    /// - Named arguments in definition order.
+    /// - Positional arguments in definition order.
+    /// - The variable argument, if any.
+    /// - The tail argument, if any.
+    direct_fields: Vec<FieldInfo<'i>>,
 
-    /// The total number of direct fields, excluding flattened or subcommand fields.
-    direct_field_cnt: u8,
+    named_field_cnt: usize,
 
     /// Indirect fields that needs delegation.
     flatten_fields: Vec<FlattenFieldInfo<'i>>,
@@ -86,29 +100,9 @@ pub struct ParserStateDefImpl<'i> {
     cmd_meta: Option<&'i CommandMeta>,
 }
 
-impl ParserStateDefImpl<'_> {
-    /// All fields directly parsed, excluding flattened and subcommands fields.
-    fn direct_fields(&self) -> impl Iterator<Item = &FieldInfo<'_>> {
-        self.positional_fields
-            .iter()
-            .chain(&self.variable_num_field)
-            .chain(&self.last_field)
-            .chain(&self.named_fields)
-    }
-
-    fn assign_field_idx(&mut self) {
-        for (f, i) in self
-            .positional_fields
-            .iter_mut()
-            .chain(&mut self.variable_num_field)
-            .chain(&mut self.last_field)
-            .chain(&mut self.named_fields)
-            .zip(0..)
-        {
-            // Not set yet.
-            assert_eq!(f.attrs.get_index(), 0);
-            f.attrs.set(ArgAttrs::index(i), true);
-        }
+impl ArgsParse<'_> {
+    pub fn args_info(&self) -> impl ToTokens {
+        RawArgsInfo(self)
     }
 
     fn flatten_tys(&self) -> impl Iterator<Item = &syn::Type> {
@@ -133,8 +127,12 @@ struct FieldInfo<'i> {
     required: bool,
     default_value: Option<DefaultValue>,
     exclusive: bool,
-    dependencies: Vec<FieldPath>,
-    conflicts: Vec<FieldPath>,
+    dependencies: Vec<FieldIdent>,
+    conflicts: Vec<FieldIdent>,
+
+    /// Referenced field index. Will be set after assigning field index.
+    dependencies_idx: Option<Vec<u8>>,
+    conflicts_idx: Option<Vec<u8>>,
 
     // Docs //
     /// Example-like description, eg. `--key <VALUE>`, `-c, --color=<COLOR>`.
@@ -280,36 +278,24 @@ fn encode_short_name(name: &LitChar) -> String {
     c.into()
 }
 
-pub fn expand_state_def_impl<'i>(
-    vis: &'i Visibility,
+pub fn expand_args_parse<'i>(
     cmd_meta: Option<&'i CommandMeta>,
-    state_name: Ident,
-    output_ty: TokenStream,
+    output_ctor: TokenStream,
     input_fields: &'i syn::FieldsNamed,
-) -> Result<ParserStateDefImpl<'i>> {
+) -> Result<ArgsParse<'i>> {
     let fields = &input_fields.named;
 
     if u8::try_from(fields.len()).is_err() {
         abort!(input_fields, "only up to 255 fields are supported");
     }
 
-    let mut out = ParserStateDefImpl {
-        vis,
-        state_name,
-        output_ty,
-        output_ctor: None,
+    let mut named_fields = Vec::with_capacity(fields.len());
+    let mut positional_fields = Vec::with_capacity(fields.len());
+    let mut var_arg_field = None::<FieldInfo>;
+    let mut last_field = None::<FieldInfo>;
+    let mut subcommand = None::<SubcommandInfo>;
 
-        named_fields: Vec::new(),
-        positional_fields: Vec::new(),
-        variable_num_field: None,
-        last_field: None,
-        direct_field_cnt: 0,
-
-        flatten_fields: Vec::new(),
-        subcommand: None,
-
-        cmd_meta,
-    };
+    let mut flatten_fields = Vec::new();
 
     let mut seen_enc_names = HashMap::new();
     let mut check_dup_name = |enc_name: String, span: Span| {
@@ -331,16 +317,16 @@ pub fn expand_state_def_impl<'i>(
                     Some(subty) => (true, subty),
                     None => (false, &field.ty),
                 };
-                if let Some(prev) = &out.subcommand {
+                if let Some(prev) = &subcommand {
                     emit_error!(ident, "duplicated subcommand");
                     emit_error!(prev.ident, "previously defined here");
                 } else {
-                    out.subcommand = Some(SubcommandInfo { ident, ty, optional });
+                    subcommand = Some(SubcommandInfo { ident, ty, optional });
                 }
                 continue;
             }
             ArgOrCommand::Command(ArgsCommandMeta::Flatten) => {
-                out.flatten_fields.push(FlattenFieldInfo { ident, ty: &field.ty });
+                flatten_fields.push(FlattenFieldInfo { ident, ty: &field.ty });
                 continue;
             }
         };
@@ -510,9 +496,7 @@ pub fn expand_state_def_impl<'i>(
                 buf
             };
 
-            out.direct_field_cnt += 1;
-
-            out.named_fields.push(FieldInfo {
+            named_fields.push(FieldInfo {
                 ident,
                 kind,
                 value_ty,
@@ -524,6 +508,8 @@ pub fn expand_state_def_impl<'i>(
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
+                dependencies_idx: None,
+                conflicts_idx: None,
                 description,
                 doc: arg.doc,
                 hide: arg.hide,
@@ -557,10 +543,11 @@ pub fn expand_state_def_impl<'i>(
                 description.push_str("...");
             }
 
+            attrs.set(ArgAttrs::VAR_ARG, is_variable_num);
+            attrs.set(ArgAttrs::LAST, arg.last);
             // arg(last) implies greedy.
             attrs.set(ArgAttrs::GREEDY, arg.trailing_var_arg | arg.last);
 
-            out.direct_field_cnt += 1;
             let info = FieldInfo {
                 ident,
                 kind,
@@ -573,6 +560,8 @@ pub fn expand_state_def_impl<'i>(
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
+                dependencies_idx: None,
+                conflicts_idx: None,
                 description,
                 doc: arg.doc,
                 hide: arg.hide,
@@ -584,40 +573,70 @@ pub fn expand_state_def_impl<'i>(
                     emit_error!(ident, "TODO: arg(last) only supports Vec-like types yet");
                 }
 
-                if let Some(prev) = &out.last_field {
+                if let Some(prev) = last_field.replace(info) {
                     emit_error!(ident, "duplicated arg(last)");
                     emit_error!(prev.ident, "previously defined here");
-                } else {
-                    out.last_field = Some(info);
                 }
             } else if is_variable_num {
                 // Variable length positional argument.
-                if let Some(prev) = &out.variable_num_field {
+                if let Some(prev) = var_arg_field.replace(info) {
                     emit_error!(ident, "duplicated variable-length arguments");
                     emit_error!(prev.ident, "previously defined here");
-                } else {
-                    out.variable_num_field = Some(info);
                 }
             } else {
                 // Single positional argument.
 
-                if let Some(prev) = &out.variable_num_field {
+                if let Some(prev) = &var_arg_field {
                     emit_error!(
                         ident,
                         "cannot have more positional arguments after a variable-length positional argument"
                     );
                     emit_error!(prev.ident, "previous variable-length argument");
+                } else {
+                    positional_fields.push(info);
                 }
-
-                out.positional_fields.push(info);
             }
         }
     }
 
-    out.assign_field_idx();
+    let named_field_cnt = named_fields.len();
+    // The order matters! See `ArgsParse::direct_fields`.
+    let mut direct_fields = named_fields
+        .into_iter()
+        .chain(positional_fields)
+        .chain(var_arg_field)
+        .chain(last_field)
+        .collect::<Vec<_>>();
 
-    if let Some(f) = out.direct_fields().find(|f| f.exclusive)
-        && !out.flatten_fields.is_empty()
+    // Assign fields indexes.
+    for (f, idx) in direct_fields.iter_mut().zip(0u8..) {
+        f.attrs.set(ArgAttrs::index(idx), true);
+    }
+
+    // Resolve field references for constraints.
+    let ident_idx_map = direct_fields
+        .iter()
+        .map(|f| (f.ident.to_string(), f.attrs.get_index()))
+        .collect::<HashMap<String, u8>>();
+    let resolve_field_refs = |idents: &[FieldIdent]| {
+        idents
+            .iter()
+            .filter_map(|ident| match ident_idx_map.get(&ident.0.to_string()) {
+                Some(&idx) => Some(idx),
+                _ => {
+                    emit_error!(ident.0, "field not found");
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    for f in &mut direct_fields {
+        f.dependencies_idx = Some(resolve_field_refs(&f.dependencies));
+        f.conflicts_idx = Some(resolve_field_refs(&f.conflicts));
+    }
+
+    if !flatten_fields.is_empty()
+        && let Some(f) = direct_fields.iter().find(|f| f.exclusive)
     {
         emit_error!(
             f.ident,
@@ -625,51 +644,55 @@ pub fn expand_state_def_impl<'i>(
         );
     }
 
-    Ok(out)
+    Ok(ArgsParse {
+        output_ctor,
+        direct_fields,
+        named_field_cnt,
+        flatten_fields,
+        subcommand,
+        cmd_meta,
+    })
 }
 
-impl ToTokens for ParserStateDefImpl<'_> {
+impl ToTokens for ArgsParse<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self { vis, state_name, output_ty, .. } = self;
-
+        // Local variables.
         let (field_idents, place_tys, finalizers) = self
-            .direct_fields()
+            .direct_fields
+            .iter()
             .map(|FieldInfo { ident, value_ty, kind, .. }| {
                 let fin = kind.finalizer();
-                (
-                    *ident,
-                    kind.place_ty(value_ty),
-                    quote! { __rt::FieldState::#fin(&mut self.#ident) },
-                )
+                (*ident, kind.place_ty(value_ty), quote! { __rt::FieldState::#fin(&mut #ident) })
             })
             .chain(self.flatten_fields.iter().map(|FlattenFieldInfo { ident, ty }| {
-                (
-                    *ident,
-                    quote! { <#ty as __rt::Args>::__State },
-                    quote! { __rt::ParserState::finish(&mut self.#ident)? },
-                )
+                (*ident, quote! { __rt::Option<#ty> }, quote! { #ident.unwrap() })
             }))
             .chain(self.subcommand.as_ref().map(|SubcommandInfo { ident, ty, optional }| {
                 let unwrap = (!*optional).then(|| quote! { .unwrap() });
-                (*ident, quote! { __rt::Option<#ty> }, quote! { self.#ident.take() #unwrap })
+                (*ident, quote! { __rt::Option<#ty> }, quote! { #ident #unwrap })
             }))
             .collect::<(Vec<_>, Vec<_>, Vec<_>)>();
+
+        let field_array_iter =
+            self.direct_fields.iter().map(|FieldInfo { ident, value_parser, .. }| {
+                quote! { __rt::FieldState::place(&mut #ident, #value_parser) }
+            });
 
         // Assertions to be forced to evaluate.
         let mut asserts = TokenStream::new();
         for ty in self.flatten_tys() {
             asserts.extend(quote_spanned! {ty.span()=>
                 __rt::assert!(
-                    <<#ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
+                    <#ty as __rt::Args>::__INFO.positional_len() == 0,
                     "TODO: cannot arg(flatten) positional arguments yet",
                 );
                 __rt::assert!(
-                    !<<#ty as __rt::Args>::__State as __rt::ParserState>::HAS_SUBCOMMAND,
+                    !<#ty as __rt::Args>::__HAS_SUBCOMMAND,
                     "cannot flatten an Args with subcommand",
                 );
             });
         }
-        for FieldInfo { value_ty, attrs, .. } in &self.named_fields {
+        for FieldInfo { value_ty, attrs, .. } in &self.direct_fields {
             if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
                 asserts.extend(quote_spanned! {value_ty.span()=>
                     __rt::assert!(
@@ -679,294 +702,166 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 });
             }
         }
-
-        let visit_named_func = VisitNamedImpl(self);
-        let visit_positional_func = VisitPositionalImpl(self);
-        let validation = ValidationImpl(self);
-
-        let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
-
-        let raw_args_info = RawArgsInfo(self);
-        let has_subcommand = self.subcommand.is_some();
-
-        let direct_field_cnt = self.direct_field_cnt;
-        let direct_positional_arg_cnt = self.positional_fields.len() as u8;
-        let flatten_tys1 = self.flatten_tys();
-        let flatten_tys2 = self.flatten_tys();
-
-        tokens.extend(quote! {
-            #[derive(::std::default::Default)]
-            #vis struct #state_name {
-                #(#field_idents: #place_tys,)*
-            }
-
-            #[automatically_derived]
-            impl __rt::ParserState for #state_name {
-                type Output = #output_ty;
-
-                const RAW_ARGS_INFO: &'static __rt::RawArgsInfo = #raw_args_info;
-                const HAS_SUBCOMMAND: __rt::bool = #has_subcommand;
-
-                const TOTAL_ARG_CNT: __rt::u8 = #direct_field_cnt
-                    #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*;
-                const TOTAL_UNNAMED_ARG_CNT: __rt::u8 = #direct_positional_arg_cnt
-                    #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
-
-                fn finish(&mut self) -> __rt::Result<Self::Output> {
-                    #validation
-                    __rt::Ok(#output_ctor {
-                        #(#field_idents : #finalizers,)*
-                    })
-                }
-            }
-
-            #[automatically_derived]
-            impl __rt::ArgsVisitor for #state_name {
-                #visit_named_func
-                #visit_positional_func
-
-                fn info(&self) -> &'static __rt::RawArgsInfo {
-                    &<Self as __rt::ParserState>::RAW_ARGS_INFO
-                }
-            }
-
-            // The result is wrapped in a `const _: () = { .. }`, which forces evaluation.
-            #asserts
-        });
-    }
-}
-
-/// `fn visit_named` generator.
-struct VisitNamedImpl<'i>(&'i ParserStateDefImpl<'i>);
-
-impl ToTokens for VisitNamedImpl<'_> {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let def = self.0;
-
-        if def.named_fields.is_empty() && def.flatten_fields.is_empty() {
-            return;
+        if !asserts.is_empty() {
+            // Force evaluation.
+            asserts = quote! { const _: () = { #asserts }; };
         }
 
-        let arms = def
-            .named_fields
-            .iter()
-            .map(|FieldInfo { ident, value_parser, enc_names, attrs, .. }| {
-                quote! { #(#enc_names)|* => (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs), }
+        let subcmd_param = match self.subcommand {
+            Some(SubcommandInfo { ident, ty, .. }) => {
+                quote! { __rt::Some(<#ty as __rt::Subcommand>::__erase(&mut #ident)) }
+            }
+            None => quote! { __rt::None },
+        };
+        let mut run_parser = quote! {
+            __rt::RunParser::run(__parser, &mut __rt::ArgsFrame {
+                fields: __fields,
+                subcmd: #subcmd_param,
+                info: __info,
+                parent: __frame,
             })
-            .collect::<TokenStream>();
-
-        // FIXME: This bloat generated code quadratically.
-        let handle_else = {
-            let direct_field_cnt = def.direct_field_cnt;
-            let flatten_names = def.flatten_fields.iter().map(|f| f.ident);
-            let offsets = (0..def.flatten_fields.len())
-                .map(|i| {
-                    let prefix_tys = def.flatten_fields[..i].iter().map(|f| f.ty);
-                    quote! {
-                        #direct_field_cnt
-                        #( + <<#prefix_tys as __rt::Args>::__State as __rt::ParserState>::TOTAL_ARG_CNT)*
-                    }
-                });
-            quote! {
-                #(__rt::ArgsVisitor::visit_named(&mut self.#flatten_names, __name).map_break(|mut __ret| {
-                    // FIXME: Add tests to ensure this overflow is caught at compile time.
-                    // NB: This relies on that `ArgAttrs::index` is at the lowest 8-bits.
-                    __ret.1.0 += const { #offsets } as ::std::primitive::u32;
-                    __ret
-                })?;)*
-            }
         };
-
-        let body = if arms.is_empty() {
-            quote! { #handle_else __rt::ControlFlow::Continue(()) }
-        } else {
-            quote! {
-                __rt::ControlFlow::Break(match __name {
-                    #arms
-                    _ => { #handle_else return __rt::ControlFlow::Continue(()) }
+        // TODO: Add tests about the order of flattened Args.
+        for FlattenFieldInfo { ident, ty } in &self.flatten_fields {
+            run_parser = quote! {
+                <#ty as __rt::Args>::__parse(&mut #ident, __frame, &mut |__frame: &mut __rt::ArgsFrame| {
+                    #run_parser
                 })
-            }
-        };
-
-        tokens.extend(quote! {
-            fn visit_named(&mut self, __name: &__rt::str) -> __rt::VisitNamedResult<'_> {
-                #body
-            }
-        });
-    }
-}
-
-// `fn visit_positional` generator.
-struct VisitPositionalImpl<'i>(&'i ParserStateDefImpl<'i>);
-
-impl ToTokens for VisitPositionalImpl<'_> {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let def = self.0;
-
-        if def.positional_fields.is_empty()
-            && def.variable_num_field.is_none()
-            && def.last_field.is_none()
-            && def.subcommand.is_none()
-        {
-            return;
-        }
-
-        let handle_subcmd = def.subcommand.as_ref().map(|SubcommandInfo { ident, ty, .. }| {
-            let state_name = &def.state_name;
-            quote! {
-                struct __Subcommand;
-                impl __rt::GetSubcommand for __Subcommand {
-                    type State = #state_name;
-                    type Subcommand = #ty;
-                    fn get(__this: &mut Self::State) -> &mut Option<Self::Subcommand> {
-                        &mut __this.#ident
-                    }
-                }
-                // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
-                // It seems impossible to somehow return it by partly erase the subcommand type.
-                if !__is_last
-                    && <#ty as __rt::Subcommand>::get_subcommand_parser(__arg).is_some()
-                {
-                    return __rt::place_for_subcommand::<__Subcommand>(self);
-                }
-            }
-        });
-
-        let mut arms = TokenStream::new();
-        for (ord, FieldInfo { ident, value_parser, attrs, .. }) in
-            def.positional_fields.iter().enumerate()
-        {
-            arms.extend(quote! {
-                #ord => (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs),
-            });
-        }
-
-        // Note: The catchall path is only entered if the subcommand does not match.
-        let catchall =
-            if let Some(FieldInfo { ident, value_parser, attrs, .. }) = &def.variable_num_field {
-                quote! { (__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs) }
-            } else if def.subcommand.is_some() {
-                // Here we know the previous subcommand parse failed.
-                // Just to report "unknown subcommand" error for it.
-                quote! { return __rt::place_for_subcommand::<__Subcommand>(self) }
-            } else {
-                quote! { return __rt::ControlFlow::Continue(()) }
             };
+        }
 
-        let handle_last = def.last_field.as_ref().map(|FieldInfo { ident, value_parser, attrs, .. }| {
-            quote! {
-                if __is_last {
-                    return __rt::ControlFlow::Break((__rt::FieldState::place(&mut self.#ident, #value_parser), #attrs));
-                }
-            }
-        });
+        let output_ctor = &self.output_ctor;
+        let validate_finish = ValidateFinish(self);
 
         tokens.extend(quote! {
-            // If there is no match arm.
-            #[allow(unreachable_code)]
-            fn visit_positional(
-                &mut self,
-                __arg: &__rt::OsStr,
-                __idx: __rt::usize,
-                __is_last: __rt::bool,
-            ) -> __rt::VisitPositionalResult {
-                #handle_last
-                #handle_subcmd
-                __rt::ControlFlow::Break(match __idx {
-                    #arms
-                    _ => #catchall
-                })
-            }
+            #asserts
+
+            #(let mut #field_idents = <#place_tys as __rt::Default>::default();)*
+            let __fields: &mut [&mut dyn __rt::Parsable; _] = &mut [ #(#field_array_iter),* ];
+
+            #run_parser?;
+
+            #validate_finish
+
+            *__out = __rt::Some(#output_ctor {
+                #(#field_idents : #finalizers,)*
+            });
+            __rt::Ok(())
         });
     }
 }
 
-struct ValidationImpl<'i>(&'i ParserStateDefImpl<'i>);
+/// Validate non-empty-ness and constraints, and set default values.
+///
+/// This includes `conflicts_with`, `exclusive`, explicit and implicit `required`.
+struct ValidateFinish<'i>(&'i ArgsParse<'i>);
 
-impl ToTokens for ValidationImpl<'_> {
+impl ToTokens for ValidateFinish<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let def = self.0;
 
-        let exclusive_idents =
-            def.direct_fields().filter_map(|f| f.exclusive.then_some(f.ident)).collect::<Vec<_>>();
-        if !exclusive_idents.is_empty() {
-            let subcmd = def.subcommand.as_ref().map(|SubcommandInfo { ident, .. }| {
-                quote! { self.#ident.is_some() as __rt::usize }
-            });
+        // TODO: Can we compress this list?
+        let isset_elems = def
+            .direct_fields
+            .iter()
+            .map(|FieldInfo { ident, .. }| {
+                quote! { __rt::FieldState::is_set(&#ident) }
+            })
+            // Include the subcommand for exclusiveness check.
+            .chain(def.subcommand.as_ref().map(|SubcommandInfo { ident, .. }| {
+                quote! { #ident.is_some() }
+            }));
+        let mut exclusive_idxs = def
+            .direct_fields
+            .iter()
+            .filter_map(|f| f.exclusive.then_some(f.attrs.get_index()))
+            .peekable();
+        let mut dependency_groups = def
+            .direct_fields
+            .iter()
+            .filter_map(|f| {
+                let cur_idx = f.attrs.get_index();
+                let idxs = f.dependencies_idx.as_ref().unwrap();
+                (!idxs.is_empty()).then(|| quote! { &[#cur_idx, #(#idxs),*] })
+            })
+            .peekable();
+        let mut conflict_groups = def
+            .direct_fields
+            .iter()
+            .filter_map(|f| {
+                let cur_idx = f.attrs.get_index();
+                let idxs = f.conflicts_idx.as_ref().unwrap();
+                (!idxs.is_empty()).then(|| quote! { &[#cur_idx, #(#idxs),*] })
+            })
+            .peekable();
+        if exclusive_idxs.peek().is_some()
+            || dependency_groups.peek().is_some()
+            || conflict_groups.peek().is_some()
+        {
             tokens.extend(quote! {
-                if 0usize
-                    #(+ __rt::FieldState::is_set(&self.#exclusive_idents) as __rt::usize)*
-                    #subcmd
-                    > 1usize
-                {
-                    __rt::todo!();
-                }
+                __rt::validate_constraints(
+                    __info,
+                    &[#(#isset_elems),*],
+                    &[#(#exclusive_idxs),*],
+                    &[#(#dependency_groups),*],
+                    &[#(#conflict_groups),*],
+                )?;
             });
         }
 
-        for f in def.direct_fields() {
+        // Check required fields inline to hint the optimizer the `unwrap` below
+        // will not fail.
+        // This is necessary to eliminate the mass dropping codegen
+        // which almost doubles or triples the function size.
+        for f in &def.direct_fields {
             let ident = f.ident;
             let idx = f.attrs.get_index();
             if f.required {
                 tokens.extend(quote! {
-                    if !__rt::FieldState::is_set(&self.#ident) {
-                        return __rt::missing_required_arg::<Self, _>(#idx)
-                    }
-                });
-            }
-
-            let mut checks = TokenStream::new();
-            if !f.dependencies.is_empty() {
-                let paths = &f.dependencies;
-                checks.extend(quote! {
-                    if #(!__rt::FieldState::is_set(&self #paths))||* {
-                        return __rt::constraint_required::<Self, _>(#idx);
-                    }
-                });
-            }
-            if !f.conflicts.is_empty() {
-                let paths = &f.conflicts;
-                checks.extend(quote! {
-                    if #(__rt::FieldState::is_set(&self #paths))||* {
-                        return __rt::constraint_conflict::<Self, _>(#idx);
-                    }
-                });
-            }
-            if !checks.is_empty() {
-                tokens.extend(quote! {
-                    if __rt::FieldState::is_set(&self.#ident) {
-                        #checks
+                    if !__rt::FieldState::is_set(&#ident) {
+                        return __rt::error_missing_arg(__info, #idx);
                     }
                 });
             }
         }
 
+        // Missing subcommand produces a special error message.
+        // This also serves as a hint to the optimizer.
         if let Some(SubcommandInfo { ident, .. }) = def.subcommand.as_ref().filter(|s| !s.optional)
         {
             tokens.extend(quote! {
-                if self.#ident.is_none() {
-                    return __rt::missing_required_subcmd();
+                if #ident.is_none() {
+                    return __rt::error_missing_subcmd();
                 }
             });
         }
 
         // Set default values after checks.
-        for FieldInfo { ident, default_value, value_parser, .. } in def.direct_fields() {
+        for FieldInfo { ident, default_value, value_parser, .. } in &def.direct_fields {
             let Some(default_value) = default_value else { continue };
             tokens.extend(match default_value {
                 DefaultValue::ValueExpr(e) => quote! {
-                    __rt::FieldState::set_default(&mut self.#ident, || #e);
+                    __rt::FieldState::set_default(&mut #ident, || #e);
                 },
                 DefaultValue::ParseStr(s) => quote! {
-                    __rt::FieldState::set_default_parse(&mut self.#ident, #s, #value_parser);
+                    __rt::FieldState::set_default_parse(&mut #ident, #s, #value_parser);
                 },
             });
         }
+
+        // 1. Suppress bulk-drop on `__out` which is unnecessary.
+        // 2. Assert all flattened arguments are already initialized.
+        let flatten_vars = self.0.flatten_fields.iter().map(|f| f.ident);
+        tokens.extend(quote! {
+            if __out.is_some() #(|| #flatten_vars.is_none())* {
+                __rt::unreachable_nounwind();
+            }
+        });
     }
 }
 
-/// Generates the reflection constant for `const RAW_ARGS_INFO`.
-struct RawArgsInfo<'a>(&'a ParserStateDefImpl<'a>);
+/// Generates the reflection constant of type `RawArgsInfo`.
+struct RawArgsInfo<'a>(&'a ArgsParse<'a>);
 
 impl ToTokens for RawArgsInfo<'_> {
     // See format in `RawArgInfo`.
@@ -976,47 +871,42 @@ impl ToTokens for RawArgsInfo<'_> {
         let mut usage_positional = FormatArgsBuilder::default();
         let mut help_named = FormatArgsBuilder::default();
         let mut help_positional = FormatArgsBuilder::default();
-        for (fields, help, usage) in [
-            (&self.0.named_fields[..], &mut help_named, &mut usage_named),
-            (&self.0.positional_fields[..], &mut help_positional, &mut usage_positional),
-        ] {
-            for f in fields {
-                if !f.hide {
-                    if f.required {
-                        usage.maybe_push_usage_for(f);
-                    }
-                    help.maybe_push_help_for(f);
-                }
+
+        for (i, f) in self.0.direct_fields.iter().enumerate() {
+            if f.hide {
+                continue;
+            }
+            let (help, usage) = if i < self.0.named_field_cnt {
+                (&mut help_named, &mut usage_named)
+            } else {
+                (&mut help_positional, &mut usage_positional)
+            };
+
+            let is_last = f.attrs.contains(ArgAttrs::LAST);
+            if is_last {
+                usage.template.push_str(if f.required { " --" } else { " [--" });
+            }
+
+            // Variable positional fields are always visible, no matter if it is
+            // optional (`[ARGS]...`) or required (`<ARGS>...`).
+            if f.required || f.attrs.contains(ArgAttrs::VAR_ARG) || is_last {
+                usage.maybe_push_usage_for(f);
+            }
+            help.maybe_push_help_for(f);
+
+            if is_last && !f.required {
+                usage.template.push(']');
             }
         }
+
         for ty in self.0.flatten_tys() {
             // FIXME: Should we `let` bind these very long expressions?
-            let help = quote! {
-                <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.help()
-            };
+            let help = quote! { <#ty as __rt::Args>::__INFO.help() };
             // Magic integers are documented at `palc::refl::RawArgsInfo::help`.
             usage_named.push_custom_arg("{:.0}", &help);
             usage_positional.push_custom_arg("{:.1}", &help);
             help_named.push_custom_arg("{:.2}", &help);
             help_positional.push_custom_arg("{:.3}", &help);
-        }
-
-        if let Some(f) = &self.0.variable_num_field
-            && !f.hide
-        {
-            // Variable positional fields are always visible, no matter if it is
-            // optional (`[ARGS]...`) or required (`<ARGS>...`).
-            usage_positional.maybe_push_usage_for(f);
-            help_positional.maybe_push_help_for(f);
-        }
-        // -- [LAST]
-        if let Some(f) = &self.0.last_field
-            && !f.hide
-        {
-            // FIXME: Optional last?
-            usage_positional.template.push_str(" --");
-            usage_positional.maybe_push_usage_for(f);
-            help_positional.maybe_push_help_for(f);
         }
 
         let help_display = quote! {{
@@ -1044,33 +934,45 @@ impl ToTokens for RawArgsInfo<'_> {
             &Help
         }};
 
-        let descs = self.0.direct_fields().flat_map(|f| [&f.description, "\0"]).collect::<String>();
+        let descs =
+            self.0.direct_fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
+        let (named_fields, positional_fields) =
+            self.0.direct_fields.split_at(self.0.named_field_cnt);
+        let positional_attrs = positional_fields.iter().map(|f| f.attrs);
+        let mut named_map = named_fields
+            .iter()
+            .flat_map(|&FieldInfo { ref enc_names, attrs, .. }| {
+                enc_names.iter().map(move |s| (&**s, attrs))
+            })
+            .collect::<Vec<_>>();
+        named_map.sort_by_key(|(name, _)| *name);
+        let named_map_from = named_map.iter().map(|(name, _)| *name);
+        let named_map_to = named_map.iter().map(|(_, attr)| *attr);
 
         let (subcmd_opt, subcmd_info) = match &self.0.subcommand {
             Some(SubcommandInfo { ty, optional, .. }) => {
-                (quote! { #optional }, quote! { __rt::Some(<#ty as __rt::Subcommand>::RAW_INFO) })
+                (quote! { #optional }, quote! { __rt::Some(<#ty as __rt::Subcommand>::__INFO) })
             }
             None => (quote! { false }, quote! { __rt::None }),
         };
 
-        let has_optional_named = self.0.named_fields.iter().any(|f| !f.required && !f.hide);
+        let has_optional_named = named_fields.iter().any(|f| !f.required && !f.hide);
 
         let cmd_doc = CommandDoc(self.0.cmd_meta);
         let flatten_tys = self.0.flatten_tys();
 
         tokens.extend(quote! {
             &__rt::RawArgsInfo::new(
+                #descs,
+                &[#((#named_map_from, #named_map_to)),*],
+                &[#(#positional_attrs),*],
+                #subcmd_info,
+
                 #subcmd_opt,
                 #has_optional_named,
-                #subcmd_info,
                 #cmd_doc,
-                #descs,
                 #help_display,
-                [
-                    #(__rt::RawArgsInfoRef(
-                        <<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO
-                    )),*
-                ],
+                &[#(<#flatten_tys as __rt::Args>::__INFO),*],
             )
         });
     }

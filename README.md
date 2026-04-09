@@ -183,7 +183,9 @@ CLI structs using `palc` is comparable to and sometimes smaller than `argh`.
 
 The derive interface is inspired and mimicking [`clap`][clap]'s derive interface.
 
-The palc runtime design is inspired by [`miniserde`](https://github.com/dtolnay/miniserde).
+The palc runtime design is inspired by:
+- [`miniserde`](https://github.com/dtolnay/miniserde)
+- [`argh`][argh]
 
 #### License
 

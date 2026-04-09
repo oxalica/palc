@@ -159,8 +159,8 @@ pub struct ArgMeta {
     // Validation.
     pub required: bool,
     pub exclusive: bool,
-    pub requires: Vec<FieldPath>,
-    pub conflicts_with: Vec<FieldPath>,
+    pub requires: Vec<FieldIdent>,
+    pub conflicts_with: Vec<FieldIdent>,
     // TODO: default_value_if{,s}, required_unless_present*, required_if*,
     // conflicts_with*, overrides_with*
 }
@@ -231,7 +231,7 @@ impl ArgMeta {
         } else if path.is_ident("conflicts_with") {
             self.conflicts_with.push(meta.value()?.parse()?);
         } else if path.is_ident("conflicts_with_all") {
-            self.conflicts_with.extend(meta.value()?.parse::<OneOrArray<FieldPath>>()?);
+            self.conflicts_with.extend(meta.value()?.parse::<OneOrArray<FieldIdent>>()?);
         } else {
             emit_error!(path, "unknown attribute");
         }
@@ -497,41 +497,18 @@ impl<T: Parse> Parse for Override<T> {
     }
 }
 
-/// `"IDENT"` or `("." IDENT)+`.
-pub struct FieldPath(pub Vec<Ident>);
+/// `"IDENT"`
+pub struct FieldIdent(pub Ident);
 
-impl ops::Deref for FieldPath {
-    type Target = [Ident];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Parse for FieldPath {
+impl Parse for FieldIdent {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut path = Vec::new();
-        if input.peek(LitStr) {
-            path.push(input.parse::<LitStr>()?.parse::<Ident>()?);
-        } else {
-            while input.peek(Token![.]) {
-                input.parse::<Token![.]>()?;
-                path.push(input.parse::<Ident>()?);
-            }
-            if path.is_empty() {
-                return Err(input.error(r#"expecting "field" or .field"#));
-            }
-        }
-        Ok(Self(path))
+        Ok(Self(input.parse::<LitStr>()?.parse::<Ident>()?))
     }
 }
 
-impl ToTokens for FieldPath {
+impl ToTokens for FieldIdent {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        for ident in &self.0 {
-            tokens.extend(quote! { . });
-            ident.to_tokens(tokens);
-        }
+        self.0.to_tokens(tokens);
     }
 }
 

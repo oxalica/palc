@@ -2,4 +2,4 @@ error[E0080]: evaluation panicked: cannot flatten an Args with subcommand
  --> tests/ui/args-flatten-subcommand.rs:6:12
   |
 6 |     inner: Inner,
-  |            ^^^^^ evaluation of `_` failed here
+  |            ^^^^^ evaluation of `_::<impl palc::__private::Args for Outer>::__parse::_` failed here

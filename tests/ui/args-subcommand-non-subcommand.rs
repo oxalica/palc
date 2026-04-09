@@ -1,5 +1,3 @@
-//! TODO: Suboptimal, see args-flatten-non-args for blockage.
-
 #[derive(palc::Args)]
 struct Cli1 {
     #[command(subcommand)]

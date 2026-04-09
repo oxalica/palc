@@ -7,56 +7,74 @@
 //! TODO(low): Decide whether to expose these API.
 #![cfg_attr(not(feature = "default"), allow(unused))]
 
-use std::fmt;
 #[cfg(not(feature = "help"))]
 use std::marker::PhantomData;
+use std::{ffi::OsStr, fmt};
 
-use crate::util::{split_once, split_sep_many, split_terminator};
+use crate::{
+    shared::ArgAttrs,
+    util::{split_once, split_sep_many, split_terminator},
+};
 
 /// Runtime information of a enum of subcommands.
-#[derive(Debug)]
-pub struct RawSubcommandInfo<A: ?Sized = [&'static str]> {
+pub struct RawSubcommandInfo {
     /// Zero or more NUL-terminated subcommand names.
-    #[cfg(feature = "help")]
-    subcommands: &'static str,
+    names: &'static str,
 
-    /// `RawArgsInfo::cmd_doc` of each subcommand.
-    #[cfg(feature = "help")]
-    cmd_docs: A,
+    /// Mapping from subcommands to its index.
+    // FIXME: Use index into `subcommands` instead of `&str`.
+    map: &'static [(&'static str, usize)],
 
-    #[cfg(not(feature = "help"))]
-    _marker: PhantomData<A>,
+    /// Links to all variant infos in order to show descriptions of
+    /// subcommands on the outer level.
+    #[cfg(feature = "help")]
+    variant_infos: &'static [&'static RawArgsInfo],
 }
 
 impl RawSubcommandInfo {
-    pub(crate) const EMPTY_REF: &Self = &Self::new("", []);
-
     // Used by proc-macro.
-    #[cfg(feature = "help")]
-    pub const fn new<const N: usize>(
-        subcommands: &'static str,
-        cmd_docs: [&'static str; N],
-    ) -> RawSubcommandInfo<[&'static str; N]> {
-        RawSubcommandInfo { subcommands, cmd_docs }
+    pub const EMPTY: Self = Self::new("", &[], &[]);
+
+    // NB: Used by proc-macro.
+    pub const fn new(
+        names: &'static str,
+        map: &'static [(&'static str, usize)],
+        variant_infos: &'static [&'static RawArgsInfo],
+    ) -> Self {
+        Self {
+            names,
+            map,
+            #[cfg(feature = "help")]
+            variant_infos,
+        }
     }
 
-    #[cfg(not(feature = "help"))]
-    pub const fn new<const N: usize>(
-        _subcommands: &'static str,
-        _cmd_docs: [&'static str; N],
-    ) -> Self {
-        Self { _marker: PhantomData }
+    pub(crate) fn search(&self, cmd: &OsStr) -> Option<(&'static str, usize)> {
+        let i = self
+            .map
+            .binary_search_by_key(&cmd.as_encoded_bytes(), |(key, _)| key.as_bytes())
+            .ok()?;
+        Some(self.map[i])
     }
 }
 
-// Break the type cycle.
-#[derive(Clone, Copy)]
-pub struct RawArgsInfoRef(pub &'static RawArgsInfo);
-
-pub struct RawArgsInfo<A: ?Sized = [RawArgsInfoRef]> {
+pub struct RawArgsInfo {
     /// Zero or more '\0'-terminated argument descriptions, either:
     /// `-s`, `--long`, `-s, --long=<VALUE>`, `<REQUIRED>`, or `[OPTIONAL]`.
     descriptions: &'static str,
+
+    /// Mapping named arguments into its attributes.
+    /// They are sorted by names for binary searching.
+    // FIXME: Use index into `descriptions` instead of `&str`.
+    named_attrs: &'static [(&'static str, ArgAttrs)],
+
+    /// Attributes of positional arguments.
+    positional_attrs: &'static [ArgAttrs],
+
+    /// Child subcommands.
+    ///
+    /// NB: This is used for parsing.
+    pub(crate) subcmd_info: Option<RawSubcommandInfo>,
 
     /// Is the child subcommand optional or required? Only useful if there are subcommands.
     #[cfg(feature = "help")]
@@ -65,10 +83,6 @@ pub struct RawArgsInfo<A: ?Sized = [RawArgsInfoRef]> {
     /// If there is any optional named args, so that "[OPTIONS]" should be shown?
     #[cfg(feature = "help")]
     has_optional_named: bool,
-
-    /// Child subcommands.
-    #[cfg(feature = "help")]
-    subcmd_info: Option<&'static RawSubcommandInfo>,
 
     /// The documentation about this command applet.
     ///
@@ -87,50 +101,49 @@ pub struct RawArgsInfo<A: ?Sized = [RawArgsInfoRef]> {
     /// - `{:.3}`: Positional argument long help.
     #[cfg(feature = "help")]
     help: &'static dyn fmt::Display,
-
-    flattened: A,
 }
 
 impl RawArgsInfo {
-    pub(crate) const EMPTY_REF: &'static Self =
-        &RawArgsInfo::new(false, false, None, "", "", &"", []);
+    // Used by proc-macro.
+    pub const EMPTY_REF: &'static Self = &Self::new("", &[], &[], None, false, false, "", &"", &[]);
 
     // Used by proc-macro.
-    pub const fn new<const N: usize>(
+    pub const fn new(
+        descriptions: &'static str,
+        named_attrs: &'static [(&'static str, ArgAttrs)],
+        positional_attrs: &'static [ArgAttrs],
+        subcmd_info: Option<RawSubcommandInfo>,
+
         subcmd_optional: bool,
         mut has_optional_named: bool,
-        subcmd_info: Option<&'static RawSubcommandInfo>,
         cmd_doc: &'static str,
-        descriptions: &'static str,
         help: &'static dyn fmt::Display,
-        flattened: [RawArgsInfoRef; N],
-    ) -> RawArgsInfo<[RawArgsInfoRef; N]> {
+        flattened: &[&RawArgsInfo],
+    ) -> RawArgsInfo {
         #[cfg(feature = "help")]
         {
             let len = flattened.len();
             let mut i = 0usize;
             while i < len {
-                let inner = flattened[i];
-                has_optional_named |= inner.0.has_optional_named;
+                has_optional_named |= flattened[i].has_optional_named;
                 i += 1;
             }
         }
 
         RawArgsInfo {
             descriptions,
+            named_attrs,
+            positional_attrs,
+            subcmd_info,
 
             #[cfg(feature = "help")]
             subcmd_optional,
             #[cfg(feature = "help")]
             has_optional_named,
             #[cfg(feature = "help")]
-            subcmd_info,
-            #[cfg(feature = "help")]
             cmd_doc,
             #[cfg(feature = "help")]
             help,
-
-            flattened,
         }
     }
 
@@ -157,11 +170,6 @@ impl RawArgsInfo {
             }
             idx -= 1;
             desc = rhs;
-        }
-        for child in &self.flattened {
-            if let Some(s) = child.0.get_description(idx) {
-                return Some(s);
-            }
         }
         None
     }
@@ -194,15 +202,36 @@ impl RawArgsInfo {
     pub(crate) fn subcommands(
         &self,
     ) -> Option<impl Iterator<Item = (&'static str, &'static str)> + Clone> {
-        let subcmd = self.subcmd_info?;
-        Some(split_terminator(subcmd.subcommands, b'\0').zip(
-            subcmd.cmd_docs.iter().map(|raw_doc| split_once(raw_doc, b'\0').unwrap_or(("", "")).0),
-        ))
+        let subcmd = self.subcmd_info.as_ref()?;
+        Some(
+            split_terminator(subcmd.names, b'\0').zip(
+                self.subcmd_info
+                    .as_ref()
+                    .unwrap()
+                    .variant_infos
+                    .iter()
+                    .map(|variant| variant.doc().long_about),
+            ),
+        )
     }
 
     #[cfg(feature = "help")]
     pub(crate) fn subcommand_optional(&self) -> bool {
         self.subcmd_optional
+    }
+
+    // FIXME: Used by proc-macro for assertion.
+    pub const fn positional_len(&self) -> usize {
+        self.positional_attrs.len()
+    }
+
+    pub(crate) fn get_named(&self, name: &str) -> Option<ArgAttrs> {
+        let i = self.named_attrs.binary_search_by_key(&name, |(key, _)| *key).ok()?;
+        Some(self.named_attrs[i].1)
+    }
+
+    pub(crate) fn positional_attrs(&self) -> &[ArgAttrs] {
+        self.positional_attrs
     }
 }
 

@@ -1,7 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::marker::PhantomData;
 use std::num::NonZero;
-use std::ops::ControlFlow;
 
 use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
@@ -13,6 +11,71 @@ use crate::shared::ArgAttrs;
 use crate::values::ValueParser;
 
 use super::Error;
+
+//////// Random utility functions called by proc-macro ////////
+// 1. `extern "C"` for nounwind hint.
+// 2. `#[cold]` to properly streamline the happy path. Otherwise LLVM will pick
+// the validation failure case to follow the main control flow, probably due to
+// the assumption of "forward jump (`if`) is likely non-taken".
+
+/// For various assertions.
+#[cold]
+pub extern "C" fn unreachable_nounwind() -> ! {
+    unreachable!()
+}
+
+/// Commonly used: any non-`Option` non-`bool` argument will check this.
+#[cold]
+#[expect(improper_ctypes_definitions)]
+pub extern "C" fn error_missing_arg(info: &RawArgsInfo, idx: u8) -> Result<()> {
+    Err(ErrorKind::MissingRequiredArgument.with_arg_idx(info, idx))
+}
+
+/// Commonly used: any non-`Option` subcommand will check this.
+#[cold]
+#[expect(improper_ctypes_definitions)]
+pub extern "C" fn error_missing_subcmd() -> Result<()> {
+    Err(ErrorKind::MissingRequiredSubcommand.into())
+}
+
+/// Other relatively uncommon opt-in constraints: `exclusive`, `dependency`, `conflict`.
+// FIXME: Too many arguments. Maybe flatten into a single template?
+#[cold]
+#[expect(improper_ctypes_definitions)]
+pub extern "C" fn validate_constraints(
+    info: &RawArgsInfo,
+    isset: &[bool],
+    exclusive: &[u8],
+    dependency_groups: &[&[u8]],
+    conflict_groups: &[&[u8]],
+) -> Result<()> {
+    if let Some(&i) = exclusive.iter().find(|&&i| isset[usize::from(i)])
+        && isset.iter().filter(|&&set| set).count() > 1
+    {
+        return Err(ErrorKind::ConstraintExclusive.with_arg_idx(info, i));
+    }
+    for &group in dependency_groups {
+        if let Some((&lhs, others)) = group.split_first()
+            && isset[usize::from(lhs)]
+            && let Some(&_rhs) = others.iter().find(|&&rhs| !isset[usize::from(rhs)])
+        {
+            // TODO: Another argument?
+            return Err(ErrorKind::ConstraintRequired.with_arg_idx(info, lhs));
+        }
+    }
+    for &group in conflict_groups {
+        if let Some((&lhs, others)) = group.split_first()
+            && isset[usize::from(lhs)]
+            && let Some(&_rhs) = others.iter().find(|&&rhs| isset[usize::from(rhs)])
+        {
+            // TODO: Another argument?
+            return Err(ErrorKind::ConstraintConflict.with_arg_idx(info, lhs));
+        }
+    }
+    Ok(())
+}
+
+//////// Major traits and types ////////
 
 /// The implementation detail of [`crate::Parser`].
 /// Not in public API.
@@ -41,7 +104,18 @@ impl<T> ParserFlavor<T> for FallbackParserFlavor {
 pub struct StructParserFlavor<A>(A);
 impl<A: Args> ParserFlavor<A> for StructParserFlavor<A> {
     fn run_parser(p: &mut RawParser, program_name: &OsStr) -> Result<A> {
-        try_parse_state::<A::__State>(p, program_name, &mut ())
+        let mut out = None;
+        let mut frame = CommandFrame {
+            #[cfg(feature = "help")]
+            name: &program_name.to_string_lossy(),
+            parent: &mut (),
+        };
+        #[cfg(not(feature = "help"))]
+        {
+            let _ = program_name;
+        }
+        A::__parse(&mut out, &mut frame, p)?;
+        Ok(out.unwrap())
     }
 }
 
@@ -54,85 +128,202 @@ impl<A: Args> ParserFlavor<A> for StructParserFlavor<A> {
 )]
 #[doc(hidden)]
 pub trait Args: Sized + 'static {
-    #[doc(hidden)]
-    type __State: ParserState<Output = Self>;
+    /// For proc-macro to reject flattening a subcommand.
+    const __HAS_SUBCOMMAND: bool;
+    const __INFO: &'static RawArgsInfo;
+
+    /// Run the parser, validate arguments and store the result into `out`.
+    ///
+    /// This function must not unwind.
+    extern "C" fn __parse(
+        out: &mut Option<Self>,
+        frame: &mut dyn Frame,
+        parser: &mut dyn RunParser,
+    ) -> Result<()>;
 }
 
-/// The fallback state type for graceful failing from proc-macro.
-pub struct FallbackState<T>(PhantomData<T>);
+/// Trait of subcommand enums.
+///
+/// This trait is in not public API. Only `derive(Subcommand)` is.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a `palc::Subcommand`",
+    label = "this type is expected to have `derive(palc::Subcommand)` but it is not"
+)]
+#[doc(hidden)]
+pub trait Subcommand: Sized + 'static {
+    const __INFO: RawSubcommandInfo;
 
-impl<T> Default for FallbackState<T> {
-    fn default() -> Self {
-        Self(PhantomData)
+    // This function must not unwind.
+    extern "C" fn __parse(
+        out: &mut Option<Self>,
+        idx: usize,
+        frame: &mut dyn Frame,
+        parser: &mut dyn RunParser,
+    ) -> Result<()>;
+
+    /// This function exists only for proc-macro to generate
+    /// `<UserTy as Subcommand>::..` which can emit a trait unsatisfied error on
+    /// the `UserTy` span.
+    fn __erase(this: &mut Option<Self>) -> &mut dyn SubcommandPlace {
+        this
     }
 }
 
-impl<T: 'static> ParserState for FallbackState<T> {
-    type Output = T;
-
-    const RAW_ARGS_INFO: &'static RawArgsInfo = RawArgsInfo::EMPTY_REF;
-
-    const TOTAL_ARG_CNT: u8 = 0;
-    const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
-
-    fn finish(&mut self) -> Result<Self::Output> {
-        // Never called at runtime.
-        unreachable!()
+/// Same as `Subcommand` but implements on `Option<impl Subcommand>` for dyn-compatibility.
+pub trait SubcommandPlace {
+    // This function must not unwind.
+    extern "C" fn __parse(
+        &mut self,
+        idx: usize,
+        frame: &mut dyn Frame,
+        parser: &mut dyn RunParser,
+    ) -> Result<()>;
+}
+impl<S: Subcommand> SubcommandPlace for Option<S> {
+    // This function must not unwind.
+    #[expect(improper_ctypes_definitions)]
+    extern "C" fn __parse(
+        &mut self,
+        idx: usize,
+        frame: &mut dyn Frame,
+        parser: &mut dyn RunParser,
+    ) -> Result<()> {
+        S::__parse(self, idx, frame, parser)
     }
 }
-impl<T: 'static> ArgsVisitor for FallbackState<T> {}
 
-// TODO: Invalid default strings are only caught at runtime, which is not ideal.
-pub fn parse_default_str<P: ValueParser>(s: &str, _: P) -> Result<P::Output> {
-    P::parse(s.as_ref())
+/// Callback function to run the actual parser.
+///
+/// This is used instead of `FnMut` for:
+/// - Simpler proc-macro codegen without the need to repeat the signature.
+/// - Smaller vtable.
+/// - TODO: "nounwind" marking.
+pub trait RunParser {
+    extern "C" fn run(&mut self, frame: &mut ArgsFrame) -> Result<()>;
+}
+impl dyn RunParser + '_ {
+    /// Parse a unit struct.
+    ///
+    /// This is called on unit enum variants.
+    #[expect(improper_ctypes_definitions)]
+    pub extern "C" fn run_unit(
+        &mut self,
+        parent: &mut dyn Frame,
+        info: &RawArgsInfo,
+    ) -> Result<()> {
+        self.run(&mut ArgsFrame { fields: &mut [], subcmd: None, info, parent })
+    }
+}
+impl<F: FnMut(&mut ArgsFrame) -> Result<()>> RunParser for F {
+    #[expect(improper_ctypes_definitions)]
+    extern "C" fn run(&mut self, frame: &mut ArgsFrame) -> Result<()> {
+        self(frame)
+    }
 }
 
-// TODO: Check inlining behavior is expected.
-pub fn unknown_subcommand<T>(name: &OsStr) -> Result<T> {
-    Err(ErrorKind::UnknownSubcommand.with_input(name.into()))
+/// Dynamic information of the chain of entered `Args`.
+///
+/// Frames are chained into a singly-linked list, with decreasing parsing precedence.
+/// Entering a subcommand or Args pushes one or more frames to the head.
+/// Flattenned Args frame are pushed before main frame since they have lower precedences.
+///
+/// ```text
+///           --- growing direction -->
+/// Stack:              Field variables..   Field variables..    Field variables..
+///                            ^                ^                      ^
+///                            |                |                      |
+/// ROOT <- CommandFrame <- ArgsFrame <- ArgsFrame <- CommandFrame <- ArgsFrame <- HEAD
+/// `()`      "myapp"  <SubCli as Args> <Cli as Args>   "mysubcmd"  Subcmd::Variant
+/// ```
+pub trait Frame {
+    fn search_named(
+        &mut self,
+        enc_name: &str,
+        global: bool,
+    ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)>;
+
+    #[cfg(feature = "help")]
+    fn collect_command_prefix(&self, out: &mut String);
 }
 
-pub fn missing_required_arg<S: ParserState, T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::MissingRequiredArgument.with_arg_idx::<S>(idx))
+// NB: proc-macro constructs this.
+pub struct ArgsFrame<'a, 'b> {
+    pub fields: &'a mut [&'b mut dyn Parsable],
+    pub subcmd: Option<&'a mut dyn SubcommandPlace>,
+    pub info: &'a RawArgsInfo,
+    pub parent: &'a mut dyn Frame,
 }
 
-pub fn missing_required_subcmd<T>() -> Result<T> {
-    Err(ErrorKind::MissingRequiredSubcommand.into())
+impl Frame for ArgsFrame<'_, '_> {
+    fn search_named(
+        &mut self,
+        enc_name: &str,
+        global: bool,
+    ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)> {
+        match self.info.get_named(enc_name) {
+            Some(attrs) if !global || attrs.contains(ArgAttrs::GLOBAL) => {
+                let place = &mut *self.fields[usize::from(attrs.get_index())];
+                Some((place, self.info, attrs))
+            }
+            _ => self.parent.search_named(enc_name, global),
+        }
+    }
+
+    #[cfg(feature = "help")]
+    fn collect_command_prefix(&self, out: &mut String) {
+        self.parent.collect_command_prefix(out);
+    }
 }
 
-pub fn constraint_required<S: ParserState, T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::ConstraintRequired.with_arg_idx::<S>(idx))
+/// An auxiliary frame recording encountered (sub)command names for "Usage".
+///
+/// The top-level `Parser` will create one command frame to recording basename
+/// of argv0 as well.
+///
+/// This frame is invisible to proc-macro generated code.
+// TODO: Can we elide this frame if help is disabled? Currently this also serves
+// as a global argument boundary.
+struct CommandFrame<'a> {
+    #[cfg(feature = "help")]
+    name: &'a str,
+    parent: &'a mut dyn Frame,
+}
+impl Frame for CommandFrame<'_> {
+    fn search_named(
+        &mut self,
+        enc_name: &str,
+        _global: bool,
+    ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)> {
+        self.parent.search_named(enc_name, true)
+    }
+
+    #[cfg(feature = "help")]
+    fn collect_command_prefix(&self, out: &mut String) {
+        self.parent.collect_command_prefix(out);
+        out.push(' ');
+        out.push_str(self.name);
+    }
 }
 
-pub fn constraint_exclusive<S: ParserState, T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::ConstraintExclusive.with_arg_idx::<S>(idx))
-}
+/// End of the frame chain.
+impl Frame for () {
+    fn search_named(
+        &mut self,
+        _enc_name: &str,
+        _global: bool,
+    ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)> {
+        None
+    }
 
-pub fn constraint_conflict<S: ParserState, T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::ConstraintConflict.with_arg_idx::<S>(idx))
+    #[cfg(feature = "help")]
+    fn collect_command_prefix(&self, _out: &mut String) {}
 }
 
 /// Type-erased objects that can be parsed into.
 pub trait Parsable {
-    /// `attrs` is the same value returned from `visit_{named,positional}`.
-    /// About `value`:
-    /// - For named arguments accepting zero values, it should be ignored.
-    /// - For named or positional arguments accepting one value, it is the extracted
-    ///   string to be parsed, either from `--named=value`, `-ovalue` or `value`.
-    ///   The callee should simply parse it.
-    /// - For variable length positional arguments, it is the first argument
-    ///   triggering the parsing. The callee should consume it and all the rest arguments.
-    ///
-    /// `cur_cmd_name` and `ancestors` are only used for subcommand, and should
-    /// be ignored otherwise. They are not passed for named arguments.
-    fn parse_from(
-        &mut self,
-        p: &mut RawParser,
-        attrs: ArgAttrs,
-        value: &OsStr,
-        cur_cmd_name: &OsStr,
-        ancestors: &mut dyn ParserChain,
-    ) -> Result<()>;
+    /// `value` is extracted from either inlined or the next argument.
+    /// It is empty for argument that accepts no value.
+    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()>;
 }
 
 /// A state for parsing a field.
@@ -148,14 +339,7 @@ pub trait FieldState: Default {
     fn set_default_parse<P: ValueParser<Output = Self::Value>>(&mut self, default: &str, p: P) {
         #[inline(never)]
         fn set_from_default_dyn(p: &mut dyn Parsable, default: &OsStr) {
-            p.parse_from(
-                &mut RawParser::new(&mut std::iter::empty()),
-                ArgAttrs::default(),
-                default.as_ref(),
-                "".as_ref(),
-                &mut (),
-            )
-            .expect("invalid default value");
+            p.parse_from(ArgAttrs::default(), default.as_ref()).expect("invalid default value");
         }
 
         if !self.is_set() {
@@ -163,6 +347,8 @@ pub trait FieldState: Default {
         }
     }
 }
+
+//////// Places ////////
 
 /// A value-less named argument, so-called flag.
 ///
@@ -192,14 +378,7 @@ impl FieldState for FlagPlace {
     }
 }
 impl Parsable for FlagPlace {
-    fn parse_from(
-        &mut self,
-        _: &mut RawParser,
-        attrs: ArgAttrs,
-        value: &OsStr,
-        _: &OsStr,
-        _: &mut dyn ParserChain,
-    ) -> Result<()> {
+    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
         if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
             return Err(ErrorKind::UnexpectedInlineValue.with_input(value.into()));
         }
@@ -246,14 +425,7 @@ impl<T> FieldState for VecPlace<T> {
 #[repr(transparent)]
 struct VecParser<P: ValueParser>(VecPlace<P::Output>);
 impl<P: ValueParser> Parsable for VecParser<P> {
-    fn parse_from(
-        &mut self,
-        p: &mut RawParser,
-        attrs: ArgAttrs,
-        value: &OsStr,
-        _: &OsStr,
-        _: &mut dyn ParserChain,
-    ) -> Result<()> {
+    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
         let v = &mut self.0.0;
 
         let visit: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.get_delimiter()
@@ -272,11 +444,7 @@ impl<P: ValueParser> Parsable for VecParser<P> {
         };
 
         visit(value)?;
-        if attrs.contains(ArgAttrs::GREEDY) {
-            for value in &mut p.iter {
-                visit(&value)?;
-            }
-        }
+
         Ok(())
     }
 }
@@ -314,14 +482,7 @@ impl<T> FieldState for SetValuePlace<T> {
 #[repr(transparent)]
 struct SetValueParser<P: ValueParser>(SetValuePlace<P::Output>);
 impl<P: ValueParser> Parsable for SetValueParser<P> {
-    fn parse_from(
-        &mut self,
-        _: &mut RawParser,
-        _: ArgAttrs,
-        value: &OsStr,
-        _: &OsStr,
-        _: &mut dyn ParserChain,
-    ) -> Result<()> {
+    fn parse_from(&mut self, _: ArgAttrs, value: &OsStr) -> Result<()> {
         if self.0.0.is_some() {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
@@ -366,14 +527,7 @@ impl<T> FieldState for SetOptionalValuePlace<T> {
 #[repr(transparent)]
 struct SetOptionalValueParser<P: ValueParser>(SetOptionalValuePlace<P::Output>);
 impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
-    fn parse_from(
-        &mut self,
-        _: &mut RawParser,
-        attrs: ArgAttrs,
-        value: &OsStr,
-        _: &OsStr,
-        _: &mut dyn ParserChain,
-    ) -> Result<()> {
+    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
         if self.0.0.is_some() {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
@@ -386,232 +540,49 @@ impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
     }
 }
 
-/// The singly linked list for states of ancestor subcommands. Deeper states come first.
-/// `ancestors` are made into trait object for lifetime erasure, or it won't compile.
-pub(crate) struct ParserChainNode<'a, 'b, 'c> {
-    pub cmd_name: &'a OsStr,
-    pub state: &'b mut dyn ArgsVisitor,
-    pub ancestors: &'c mut dyn ParserChain,
+//////// Parsing logic ////////
+
+pub struct RawParser<'i> {
+    iter: &'i mut dyn Iterator<Item = OsString>,
+    /// If we are inside a short arguments bundle, the index of next short arg.
+    next_short_idx: Option<NonZero<usize>>,
 }
 
-pub trait ParserChain {
-    #[expect(private_interfaces, reason = "not used by proc-macro")]
-    fn out(&mut self) -> Option<ParserChainNode<'_, '_, '_>> {
-        None
+impl RunParser for RawParser<'_> {
+    #[expect(improper_ctypes_definitions)]
+    extern "C" fn run(&mut self, frame: &mut ArgsFrame) -> Result<()> {
+        run_parser(self, frame)
     }
 }
 
-impl dyn ParserChain + '_ {
-    fn visit_global_named(
-        &mut self,
-        enc_name: &str,
-    ) -> ControlFlow<(&mut dyn Parsable, ArgAttrs, &'static RawArgsInfo)> {
-        let Some(node) = self.out() else { return ControlFlow::Continue(()) };
-        let info = node.state.info();
-        if let ControlFlow::Break((place, attrs)) = node.state.visit_named(enc_name)
-            && attrs.contains(ArgAttrs::GLOBAL)
-        {
-            return ControlFlow::Break((place, attrs, info));
-        }
-        node.ancestors.visit_global_named(enc_name)
-    }
-}
+fn run_parser(p: &mut RawParser, frame: &mut ArgsFrame) -> Result<()> {
+    // Move out the subcommand since we will borrow it mutably together with `frame`.
+    let mut subcmd = frame.subcmd.take();
 
-impl ParserChain for () {}
+    let mut positional_attrs = frame.info.positional_attrs();
+    let mut after_dash_dash = false;
 
-// TODO: De-virtualize this.
-impl ParserChain for ParserChainNode<'_, '_, '_> {
-    fn out(&mut self) -> Option<ParserChainNode<'_, '_, '_>> {
-        // Reborrow fields.
-        let ParserChainNode { cmd_name, state, ancestors } = self;
-        Some(ParserChainNode { cmd_name, state: &mut **state, ancestors: &mut **ancestors })
-    }
-}
-
-pub fn place_for_subcommand<G: GetSubcommand>(state: &mut G::State) -> VisitPositionalResult<'_> {
-    #[derive(RefCast)]
-    #[repr(transparent)]
-    struct Place<G: GetSubcommand>(G::State);
-
-    impl<G: GetSubcommand> Parsable for Place<G> {
-        fn parse_from(
-            &mut self,
-            p: &mut RawParser,
-            _: ArgAttrs,
-            value: &OsStr,
-            cur_cmd_name: &OsStr,
-            ancestors: &mut dyn ParserChain,
-        ) -> Result<()> {
-            // Recombine the state chain with the current state.
-            let states =
-                &mut ParserChainNode { cmd_name: cur_cmd_name, state: &mut self.0, ancestors };
-            let subcmd = G::Subcommand::try_parse_with_name(p, value, states)?;
-            *G::get(&mut self.0) = Some(subcmd);
-            Ok(())
-        }
-    }
-
-    ControlFlow::Break((Place::<G>::ref_cast_mut(state), /* unused */ ArgAttrs::default()))
-}
-
-/// `Break` on a resolved place. `Continue` on unknown names.
-/// So we can `?` in generated code of `command(flatten)`.
-pub type VisitNamedResult<'s> = ControlFlow<(&'s mut dyn Parsable, ArgAttrs)>;
-
-pub type VisitPositionalResult<'s> = VisitNamedResult<'s>;
-
-pub trait ParserState: Default + ArgsVisitor {
-    type Output;
-
-    const RAW_ARGS_INFO: &'static RawArgsInfo = RawArgsInfo::EMPTY_REF;
-    /// For proc-macro to reject flattening an `impl Args` with subcommands.
-    const HAS_SUBCOMMAND: bool = false;
-
-    const TOTAL_ARG_CNT: u8 = 0;
-    const TOTAL_UNNAMED_ARG_CNT: u8 = 0;
-
-    // Semantically this takes the ownership of `self`, but using `&mut self`
-    // can eliminate partial drop codegen and call the default drop impl.
-    // It gives a much better codegen.
-    fn finish(&mut self) -> Result<Self::Output>;
-}
-
-/// The helper trait for `place_for_subcommand`.
-///
-/// It is possible to merge these methods into `ParserState`, but that would
-/// expose `Subcommand` type at `UserParser::__State::Subcommand`, causing
-/// various privacy issues if `UserParser` and its subcommand have different
-/// privacy.
-///
-/// Here we define a separated (public) trait, but let proc-macro generate a
-/// private witness type inside `visit_positional`, hiding the subcommand type from
-/// public interface.
-pub trait GetSubcommand: 'static {
-    type State: ParserState;
-    type Subcommand: Subcommand;
-    fn get(state: &mut Self::State) -> &mut Option<Self::Subcommand>;
-}
-
-pub trait ArgsVisitor: 'static {
-    /// Try to accept a named argument.
-    ///
-    /// If this parser accepts named argument `name`, return `Break(argument_place)`;
-    /// otherwise, return `Continue(())`.
-    ///
-    /// `enc_name` is the encoded argument name to be matched on:
-    /// - "-s" => "s"
-    /// - "--long" => "long"
-    /// - "--l" => "--l", to disambiguate from short arguments.
-    fn visit_named(&mut self, _enc_name: &str) -> VisitNamedResult<'_> {
-        ControlFlow::Continue(())
-    }
-
-    /// Try to accept an positional argument.
-    ///
-    /// `idx` is the index of logical arguments, counting each multi-value-argument as one.
-    /// `is_last` indicates if a `--` has been encountered. It does not affect
-    /// the increment of `idx`.
-    fn visit_positional(
-        &mut self,
-        _arg: &OsStr,
-        _idx: usize,
-        _is_last: bool,
-    ) -> VisitPositionalResult<'_> {
-        ControlFlow::Continue(())
-    }
-
-    /// Runtime reflection.
-    fn info(&self) -> &'static RawArgsInfo {
-        RawArgsInfo::EMPTY_REF
-    }
-}
-
-/// Trait of subcommand enums.
-///
-/// This trait is in not public API. Only `derive(Subcommand)` is.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a `palc::Subcommand`",
-    label = "this type is expected to have `derive(palc::Subcommand)` but it is not"
-)]
-#[doc(hidden)]
-pub trait Subcommand: Sized + 'static {
-    const RAW_INFO: &'static RawSubcommandInfo = RawSubcommandInfo::EMPTY_REF;
-
-    fn get_subcommand_parser(_name: &OsStr) -> SubcommandParserFn<Self> {
-        None
-    }
-
-    fn try_parse_with_name(
-        p: &mut RawParser,
-        name: &OsStr,
-        states: &mut dyn ParserChain,
-    ) -> Result<Self> {
-        let Some(f) = Self::get_subcommand_parser(name) else {
-            return unknown_subcommand(name);
-        };
-        f(p, name, states)
-    }
-}
-
-/// The fn signature of [`try_parse_state`], returned by [`Subcommand::get_subcommand_parser`].
-pub type SubcommandParserFn<T> =
-    Option<fn(p: &mut RawParser, subcmd: &OsStr, states: &mut dyn ParserChain) -> Result<T>>;
-
-#[cfg(test)]
-fn _assert_subcommand_parser_type<S: ParserState>() -> SubcommandParserFn<S::Output> {
-    Some(try_parse_state::<S>)
-}
-
-pub fn try_parse_state<S: ParserState>(
-    p: &mut RawParser,
-    cmd_name: &OsStr,
-    ancestors: &mut dyn ParserChain,
-) -> Result<S::Output> {
-    let mut state = S::default();
-    let node = &mut ParserChainNode { cmd_name, state: &mut state, ancestors };
-    try_parse_state_dyn(p, node)?;
-    state.finish()
-}
-
-/// The outlined main logic of parser.
-#[inline(never)]
-fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result<()> {
     let mut buf = OsString::new();
-
-    // The next index of positional arguments.
-    let mut positional_idx = 0usize;
-
-    while let Some(arg) = p.next_arg(&mut buf)? {
+    while let Some(arg) =
+        if after_dash_dash { p.iter.next().map(RawArg::Positional) } else { p.next_arg(&mut buf)? }
+    {
         match arg {
             RawArg::EncodedNamed(enc_name, inline_value) => {
-                let args_info = chain.state.info();
-                let (place, mut attrs, args_info) = match chain.state.visit_named(enc_name) {
-                    ControlFlow::Break((place, attrs)) => (place, attrs, args_info),
-                    ControlFlow::Continue(()) => {
-                        match chain.ancestors.visit_global_named(enc_name) {
-                            ControlFlow::Break(ret) => ret,
-                            ControlFlow::Continue(()) => {
-                                // TODO: Configurable help?
-                                #[cfg(feature = "help")]
-                                if enc_name == "h" || enc_name == "help" {
-                                    return Err(
-                                        Error::from(ErrorKind::Help).maybe_render_help(chain)
-                                    );
-                                }
-                                let mut dec_name = String::with_capacity(2 + enc_name.len());
-                                // TODO: Dedup this code with `Error::fmt`.
-                                if enc_name.chars().nth(1).is_none() {
-                                    dec_name.push('-');
-                                } else if !enc_name.starts_with("--") {
-                                    dec_name.push_str("--");
-                                }
-                                dec_name.push_str(enc_name);
-                                return Err(
-                                    ErrorKind::UnknownNamedArgument.with_input(dec_name.into())
-                                );
-                            }
-                        }
+                let Some((place, info, mut attrs)) = frame.search_named(enc_name, false) else {
+                    // TODO: Configurable help?
+                    #[cfg(feature = "help")]
+                    if enc_name == "h" || enc_name == "help" {
+                        return Err(Error::from(ErrorKind::Help).maybe_render_help(frame));
                     }
+                    let mut dec_name = String::with_capacity(2 + enc_name.len());
+                    // TODO: Dedup this code with `Error::fmt`.
+                    if enc_name.chars().nth(1).is_none() {
+                        dec_name.push('-');
+                    } else if !enc_name.starts_with("--") {
+                        dec_name.push_str("--");
+                    }
+                    dec_name.push_str(enc_name);
+                    return Err(ErrorKind::UnknownNamedArgument.with_input(dec_name.into()));
                 };
 
                 let require_value = attrs.contains(ArgAttrs::REQUIRE_VALUE);
@@ -650,57 +621,78 @@ fn try_parse_state_dyn(p: &mut RawParser, chain: &mut ParserChainNode) -> Result
                     }
                 };
 
-                value_ret
-                    .and_then(|mut value| {
-                        if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
-                            value.make_ascii_lowercase();
-                        }
-                        place.parse_from(p, attrs, &value, "".as_ref(), &mut ())
-                    })
-                    .map_err(
-                        #[cold]
-                        |err| {
-                            let desc = args_info.get_description(attrs.get_index());
-                            err.with_arg_desc(desc).maybe_render_help(chain)
-                        },
-                    )?;
+                match value_ret.and_then(|mut value| {
+                    if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
+                        value.make_ascii_lowercase();
+                    }
+                    place.parse_from(attrs, &value)
+                }) {
+                    Ok(()) => {}
+                    Err(err) => {
+                        let desc = info.get_description(attrs.get_index());
+                        return Err(err.with_arg_desc(desc).maybe_render_help(frame));
+                    }
+                }
             }
             RawArg::Positional(arg) => {
-                match chain.state.visit_positional(&arg, positional_idx, false) {
-                    ControlFlow::Break((place, attrs)) => {
-                        positional_idx += 1;
-                        place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
+                // Subcommand has priority, but only before `--`.
+                if !after_dash_dash
+                    && let Some(place) = &mut subcmd
+                    && let Some(subcmd_info) = &frame.info.subcmd_info
+                    && let Some((name, idx)) = subcmd_info.search(&arg)
+                {
+                    drop(arg);
+                    drop(buf);
+                    let mut frame = CommandFrame {
+                        #[cfg(feature = "help")]
+                        name,
+                        parent: frame,
+                    };
+                    #[cfg(not(feature = "help"))]
+                    {
+                        let _ = name;
                     }
-                    ControlFlow::Continue(()) => {
-                        return Err(ErrorKind::ExtraPositionalArgument.with_input(arg));
+                    return (**place).__parse(idx, &mut frame, p);
+                }
+
+                let attrs = if let Some((&attrs, rest)) = positional_attrs.split_first()
+                    && (after_dash_dash || !attrs.contains(ArgAttrs::LAST))
+                {
+                    // Advance only if this is not a va-arg.
+                    if !attrs.contains(ArgAttrs::VAR_ARG) {
+                        positional_attrs = rest;
                     }
+                    attrs
+                } else if subcmd.is_some() {
+                    return Err(ErrorKind::UnknownSubcommand.with_input(arg));
+                } else {
+                    return Err(ErrorKind::ExtraPositionalArgument.with_input(arg));
+                };
+
+                let place = &mut *frame.fields[usize::from(attrs.get_index())];
+                place.parse_from(attrs, &arg)?;
+                if attrs.contains(ArgAttrs::GREEDY) {
+                    drop(arg);
+                    drop(buf);
+                    for arg in &mut *p.iter {
+                        place.parse_from(attrs, &arg)?;
+                    }
+                    return Ok(());
                 }
             }
             RawArg::DashDash => {
-                drop(arg);
-                drop(buf);
-                while let Some(arg) = p.iter.next() {
-                    match chain.state.visit_positional(&arg, positional_idx, true) {
-                        ControlFlow::Break((place, attrs)) => {
-                            positional_idx += 1;
-                            place.parse_from(p, attrs, &arg, chain.cmd_name, chain.ancestors)?;
-                        }
-                        ControlFlow::Continue(()) => {
-                            return Err(ErrorKind::ExtraPositionalArgument.with_input(arg));
-                        }
-                    }
+                after_dash_dash = true;
+
+                // If there is a "last" argument, all further arguments goes into it.
+                if let Some(last) = positional_attrs.last()
+                    && last.contains(ArgAttrs::LAST)
+                {
+                    positional_attrs = std::slice::from_ref(last);
                 }
-                return Ok(());
             }
         }
     }
     Ok(())
-}
-
-pub struct RawParser<'i> {
-    iter: &'i mut dyn Iterator<Item = OsString>,
-    /// If we are inside a short arguments bundle, the index of next short arg.
-    next_short_idx: Option<NonZero<usize>>,
 }
 
 #[derive(Debug)]
