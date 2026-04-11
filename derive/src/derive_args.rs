@@ -858,73 +858,7 @@ struct RawArgsInfo<'a>(&'a ArgsParse<'a>);
 impl ToTokens for RawArgsInfo<'_> {
     // See format in `RawArgInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        // Generate help string formatter.
-        let mut usage_named = FormatArgsBuilder::default();
-        let mut usage_positional = FormatArgsBuilder::default();
-        let mut help_named = FormatArgsBuilder::default();
-        let mut help_positional = FormatArgsBuilder::default();
-
-        for (i, f) in self.0.direct_fields.iter().enumerate() {
-            if f.hide {
-                continue;
-            }
-            let (help, usage) = if i < self.0.named_field_cnt {
-                (&mut help_named, &mut usage_named)
-            } else {
-                (&mut help_positional, &mut usage_positional)
-            };
-
-            let is_last = f.attrs.contains(ArgAttrs::LAST);
-            if is_last {
-                usage.template.push_str(if f.required { " --" } else { " [--" });
-            }
-
-            // Variable positional fields are always visible, no matter if it is
-            // optional (`[ARGS]...`) or required (`<ARGS>...`).
-            if f.required || f.attrs.contains(ArgAttrs::VAR_ARG) || is_last {
-                usage.maybe_push_usage_for(f);
-            }
-            help.maybe_push_help_for(f);
-
-            if is_last && !f.required {
-                usage.template.push(']');
-            }
-        }
-
-        for ty in self.0.flatten_tys() {
-            // FIXME: Should we `let` bind these very long expressions?
-            let help = quote! { <#ty as __rt::Args>::__INFO.help() };
-            // Magic integers are documented at `palc::refl::RawArgsInfo::help`.
-            usage_named.push_custom_arg("{:.0}", &help);
-            usage_positional.push_custom_arg("{:.1}", &help);
-            help_named.push_custom_arg("{:.2}", &help);
-            help_positional.push_custom_arg("{:.3}", &help);
-        }
-
-        let help_display = quote! {{
-            struct Help;
-            impl __rt::fmt::Display for Help {
-                fn fmt(&self, __f: &mut __rt::fmt::Formatter<'_>) -> __rt::fmt::Result {
-                    // There can be a lot of default values. Put this here rather than inlining below.
-                    use __rt::InferDisplayDefaultValue as _;
-
-                    // NB: Do not extract `write_fmt` call outside the match!
-                    // There are several bugs that we may run into even after 1.89.
-                    // Rustc bug: <https://github.com/rust-lang/rust/issues/145422>
-                    // Clippy bug: <https://github.com/rust-lang/rust-clippy/issues/16736>
-                    match __f.precision().unwrap_or(0) {
-                        // The integer mapping is documented at `palc::refl::RawArgsInfo::help`.
-                        0 => __f.write_fmt(#usage_named),
-                        1 => __f.write_fmt(#usage_positional),
-                        2 => __f.write_fmt(#help_named),
-                        _ => __f.write_fmt(#help_positional),
-                    }
-                }
-            }
-
-
-            &Help
-        }};
+        let help_display = HelpDisplay { parse: Some(self.0), cmd_meta: self.0.cmd_meta };
 
         let descs =
             self.0.direct_fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
@@ -950,7 +884,6 @@ impl ToTokens for RawArgsInfo<'_> {
 
         let has_optional_named = named_fields.iter().any(|f| !f.required && !f.hide);
 
-        let cmd_doc = CommandDoc(self.0.cmd_meta);
         let flatten_tys = self.0.flatten_tys();
 
         tokens.extend(quote! {
@@ -962,11 +895,122 @@ impl ToTokens for RawArgsInfo<'_> {
 
                 #subcmd_opt,
                 #has_optional_named,
-                #cmd_doc,
                 #help_display,
                 &[#(<#flatten_tys as __rt::Args>::__INFO),*],
             )
         });
+    }
+}
+
+/// Generate a `&'static dyn Display` for help message related formatting.
+pub struct HelpDisplay<'i> {
+    pub parse: Option<&'i ArgsParse<'i>>,
+    pub cmd_meta: Option<&'i CommandMeta>,
+}
+
+impl ToTokens for HelpDisplay<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let mut arms = TokenStream::new();
+        let mut push_arm = |i: usize, tts: &dyn ToTokens| {
+            arms.extend(quote! { #i => __f.write_fmt(#tts), });
+        };
+
+        if let Some(parse) = self.parse {
+            // Generate help string formatter.
+            let mut usage_named = FormatArgsBuilder::default();
+            let mut usage_positional = FormatArgsBuilder::default();
+            let mut help_named = FormatArgsBuilder::default();
+            let mut help_positional = FormatArgsBuilder::default();
+
+            for (i, f) in parse.direct_fields.iter().enumerate() {
+                if f.hide {
+                    continue;
+                }
+                let (help, usage) = if i < parse.named_field_cnt {
+                    (&mut help_named, &mut usage_named)
+                } else {
+                    (&mut help_positional, &mut usage_positional)
+                };
+
+                let is_last = f.attrs.contains(ArgAttrs::LAST);
+                if is_last {
+                    usage.template.push_str(if f.required { " --" } else { " [--" });
+                }
+
+                // Variable positional fields are always visible, no matter if it is
+                // optional (`[ARGS]...`) or required (`<ARGS>...`).
+                if f.required || f.attrs.contains(ArgAttrs::VAR_ARG) || is_last {
+                    usage.maybe_push_usage_for(f);
+                }
+                help.maybe_push_help_for(f);
+
+                if is_last && !f.required {
+                    usage.template.push(']');
+                }
+            }
+
+            for ty in parse.flatten_tys() {
+                // FIXME: Should we `let` bind these very long expressions?
+                let help = quote! { <#ty as __rt::Args>::__INFO.help() };
+                // Magic integers are documented at `palc::refl::RawArgsInfo::help`.
+                usage_named.push_custom_arg("{:.0}", &help);
+                usage_positional.push_custom_arg("{:.1}", &help);
+                help_named.push_custom_arg("{:.2}", &help);
+                help_positional.push_custom_arg("{:.3}", &help);
+            }
+
+            // The integer mapping is documented at `palc::refl::RawArgsInfo::help`.
+            if !usage_named.is_empty() {
+                push_arm(0, &usage_named);
+            }
+            if !usage_positional.is_empty() {
+                push_arm(1, &usage_positional);
+            }
+            if !help_named.is_empty() {
+                push_arm(2, &help_named);
+            }
+            if !help_positional.is_empty() {
+                push_arm(3, &help_positional);
+            }
+        }
+
+        if let Some(meta) = self.cmd_meta {
+            let long_about: &dyn ToTokens = match &meta.long_about {
+                Some(Override::Explicit(e)) => e,
+                Some(Override::Inherit) => &quote! { env!("CARGO_PKG_DESCRIPTION") },
+                None => &meta.doc,
+            };
+            push_arm(4, &quote! { __rt::format_args!("{}", #long_about) });
+
+            if let Some(expr) = &meta.after_long_help {
+                push_arm(5, &quote! { __rt::format_args!("{}", #expr) });
+            }
+        }
+
+        if arms.is_empty() {
+            tokens.extend(quote! { &"" });
+            return;
+        }
+
+        tokens.extend(quote! {{
+            struct Help;
+            impl __rt::fmt::Display for Help {
+                fn fmt(&self, __f: &mut __rt::fmt::Formatter<'_>) -> __rt::fmt::Result {
+                    // There can be a lot of default values. Put this here rather than inlining below.
+                    use __rt::InferDisplayDefaultValue as _;
+
+                    // NB: Do not extract `write_fmt` call outside the match!
+                    // There are several bugs that we may run into even after 1.89.
+                    // Rustc bug: <https://github.com/rust-lang/rust/issues/145422>
+                    // Clippy bug: <https://github.com/rust-lang/rust-clippy/issues/16736>
+                    match __f.precision().unwrap_or(0) {
+                        #arms
+                        _ => __rt::Ok(())
+                    }
+                }
+            }
+            &Help
+        }});
     }
 }
 
@@ -977,6 +1021,10 @@ struct FormatArgsBuilder {
 }
 
 impl FormatArgsBuilder {
+    fn is_empty(&self) -> bool {
+        self.template.is_empty()
+    }
+
     fn push_arg(&mut self, tts: impl ToTokens) {
         self.push_custom_arg("{}", tts);
     }
@@ -1053,37 +1101,6 @@ impl ToTokens for FormatArgsBuilder {
         let Self { template, args } = self;
         tokens.extend(quote! {
             __rt::format_args!(#template #args)
-        });
-    }
-}
-
-/// String value for `RawArgsInfo::cmd_doc`.
-pub struct CommandDoc<'a>(pub Option<&'a CommandMeta>);
-
-impl ToTokens for CommandDoc<'_> {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Some(m) = self.0 else {
-            "".to_tokens(tokens);
-            return;
-        };
-
-        let long_about: &dyn ToTokens = match &m.long_about {
-            Some(Override::Explicit(e)) => e,
-            Some(Override::Inherit) => &quote! { env!("CARGO_PKG_DESCRIPTION") },
-            None => &m.doc,
-        };
-
-        let after_long_help: &dyn ToTokens = match &m.after_long_help {
-            Some(e) => e,
-            None => &"",
-        };
-
-        tokens.extend(quote! {
-            __rt::__const_concat!(
-                #long_about,
-                "\0",
-                #after_long_help,
-            )
         });
     }
 }

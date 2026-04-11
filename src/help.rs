@@ -1,10 +1,17 @@
-use std::fmt::Write;
-
-use crate::runtime::{ArgsFrame, Frame};
+use crate::{
+    runtime::{ArgsFrame, Frame},
+    util::split_once,
+};
 
 #[inline(never)]
 fn push_str(out: &mut String, s: &str) {
     out.push_str(s);
+}
+
+macro_rules! writefmt {
+    ($out:expr, $($tt:tt)*) => {
+        _ = std::fmt::write($out, format_args!($($tt)*))
+    };
 }
 
 #[cold]
@@ -16,11 +23,15 @@ pub(crate) fn render_help_into(out: &mut String, frame: &ArgsFrame) {
     }
 
     let info = frame.info;
+    let help_fmt = info.help;
 
     // About this (sub)command.
-    let doc = info.doc();
-    if !doc.long_about.is_empty() {
-        w!(doc.long_about, "\n\n");
+    {
+        let pos = out.len();
+        writefmt!(out, "{help_fmt:.4}");
+        if out.len() != pos {
+            w!("\n\n");
+        }
     }
 
     // Usage of current subcommand path.
@@ -29,19 +40,15 @@ pub(crate) fn render_help_into(out: &mut String, frame: &ArgsFrame) {
     frame.collect_command_prefix(out);
 
     // TODO: Global args.
-    _ = std::fmt::write(
+    writefmt!(
         out,
-        format_args!(
-            "{:.0}{}{:.1}",
-            info.help(),
-            if info.has_optional_named() { " [OPTIONS]" } else { "" },
-            info.help(),
-        ),
+        "{help_fmt:.0}{}{help_fmt:.1}",
+        if info.has_optional_named { " [OPTIONS]" } else { "" },
     );
 
-    let subcmds = info.subcommands();
+    let subcmds = info.subcommands_with_help();
     if subcmds.is_some() {
-        w!(if info.subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" });
+        w!(if info.is_subcmd_optional { " [COMMAND]" } else { " <COMMAND>" });
     }
     // EOL and empty line separator.
     w!("\n\n");
@@ -54,13 +61,19 @@ pub(crate) fn render_help_into(out: &mut String, frame: &ArgsFrame) {
         let max_len = subcmds.clone().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
 
         // Note: Only short help is displayed for the subcommand list.
-        for (cmd, long_about) in subcmds {
+        for (cmd, subcmd_help_fmt) in subcmds {
             w!("    ", cmd);
-            if !long_about.is_empty() {
-                let short_about = long_about.split_terminator('\n').next().unwrap_or(long_about);
-                let pad_len = max_len.saturating_sub(cmd.len()) + 2;
-                let pad = &pad[..pad.len().min(pad_len)];
-                w!("", pad, short_about);
+            let pad_len = max_len.saturating_sub(cmd.len()) + 2;
+            let pad = &pad[..pad.len().min(pad_len)];
+
+            let pos = out.len();
+            // 4: long_about
+            writefmt!(out, "{pad}{subcmd_help_fmt:.4}");
+            if out.len() == pos {
+                out.truncate(pos - pad.len());
+            } else if let Some((lhs, _)) = split_once(&out[pos..], b'\n') {
+                // Only keep the first line as summary.
+                out.truncate(pos + lhs.len());
             }
             w!("\n");
         }
@@ -75,7 +88,7 @@ pub(crate) fn render_help_into(out: &mut String, frame: &ArgsFrame) {
         w!("Arguments:\n");
         let banner = out.len();
         // 3: Positional argument long help.
-        _ = write!(out, "{:.3}", info.help());
+        writefmt!(out, "{help_fmt:.3}");
         if out.len() == banner {
             out.truncate(last);
         }
@@ -88,12 +101,12 @@ pub(crate) fn render_help_into(out: &mut String, frame: &ArgsFrame) {
         w!("Options:\n");
         let banner = out.len();
         // 2: Named argument long help.
-        _ = write!(out, "{:.2}", info.help());
+        writefmt!(out, "{help_fmt:.2}");
         if out.len() == banner {
             out.truncate(last);
         }
         // Empty line separator should already be emitted.
     }
 
-    w!(doc.after_long_help);
+    writefmt!(out, "{help_fmt:.5}");
 }

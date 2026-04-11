@@ -13,7 +13,7 @@ use std::{ffi::OsStr, fmt};
 
 use crate::{
     shared::ArgAttrs,
-    util::{split_once, split_sep_many, split_terminator},
+    util::{split_once, split_terminator},
 };
 
 /// Runtime information of a enum of subcommands.
@@ -81,19 +81,11 @@ pub struct RawArgsInfo {
 
     /// Is the child subcommand optional or required? Only useful if there are subcommands.
     #[cfg(feature = "help")]
-    subcmd_optional: bool,
+    pub(crate) is_subcmd_optional: bool,
 
     /// If there is any optional named args, so that "[OPTIONS]" should be shown?
     #[cfg(feature = "help")]
-    has_optional_named: bool,
-
-    /// The documentation about this command applet.
-    ///
-    /// This consists of '\0'-separated following elements:
-    /// - long_about
-    /// - after_long_help
-    #[cfg(feature = "help")]
-    cmd_doc: &'static str,
+    pub(crate) has_optional_named: bool,
 
     /// Help string formatter.
     ///
@@ -102,13 +94,15 @@ pub struct RawArgsInfo {
     /// - `{:.1}`: Positional argument usage, with leading space.
     /// - `{:.2}`: Named argument long help.
     /// - `{:.3}`: Positional argument long help.
+    /// - `{:.4}`: `about`
+    /// - `{:.5}`: `after_long_help`
     #[cfg(feature = "help")]
-    help: &'static dyn fmt::Display,
+    pub(crate) help: &'static dyn fmt::Display,
 }
 
 impl RawArgsInfo {
     // Used by proc-macro.
-    pub const EMPTY_REF: &'static Self = &Self::new("", &[], &[], None, false, false, "", &"", &[]);
+    pub const EMPTY_REF: &'static Self = &Self::new("", &[], &[], None, false, false, &"", &[]);
 
     // Used by proc-macro.
     pub const fn new(
@@ -117,9 +111,8 @@ impl RawArgsInfo {
         positional_attrs: &'static [ArgAttrs],
         subcmd_info: Option<RawSubcommandInfo>,
 
-        subcmd_optional: bool,
+        is_subcmd_optional: bool,
         mut has_optional_named: bool,
-        cmd_doc: &'static str,
         help: &'static dyn fmt::Display,
         flattened: &[&RawArgsInfo],
     ) -> RawArgsInfo {
@@ -140,25 +133,11 @@ impl RawArgsInfo {
             subcmd_info,
 
             #[cfg(feature = "help")]
-            subcmd_optional,
+            is_subcmd_optional,
             #[cfg(feature = "help")]
             has_optional_named,
             #[cfg(feature = "help")]
-            cmd_doc,
-            #[cfg(feature = "help")]
             help,
-        }
-    }
-
-    // Used by proc-macro for construction of `RawSubcommandInfo`.
-    pub const fn raw_cmd_docs(&self) -> &str {
-        #[cfg(feature = "help")]
-        {
-            self.cmd_doc
-        }
-        #[cfg(not(feature = "help"))]
-        {
-            ""
         }
     }
 
@@ -177,11 +156,6 @@ impl RawArgsInfo {
         None
     }
 
-    #[cfg(feature = "help")]
-    pub(crate) fn has_optional_named(&self) -> bool {
-        self.has_optional_named
-    }
-
     // Used by proc-macro for composing `help` that contains sub-args.
     pub fn help(&self) -> &'static dyn fmt::Display {
         #[cfg(feature = "help")]
@@ -194,33 +168,16 @@ impl RawArgsInfo {
         }
     }
 
+    /// Iterate over subcommands with their aggregated helps.
     #[cfg(feature = "help")]
-    pub(crate) fn doc(&self) -> CommandDoc {
-        let [long_about, after_long_help] = split_sep_many(self.cmd_doc, b'\0').unwrap_or([""; 2]);
-        CommandDoc { long_about, after_long_help }
-    }
-
-    /// Iterate over subcommands and short descriptions.
-    #[cfg(feature = "help")]
-    pub(crate) fn subcommands(
+    pub(crate) fn subcommands_with_help(
         &self,
-    ) -> Option<impl Iterator<Item = (&'static str, &'static str)> + Clone> {
+    ) -> Option<impl Iterator<Item = (&'static str, &'static dyn fmt::Display)> + Clone> {
         let subcmd = self.subcmd_info.as_ref()?;
         Some(
-            split_terminator(subcmd.names, b'\0').zip(
-                self.subcmd_info
-                    .as_ref()
-                    .unwrap()
-                    .variant_infos
-                    .iter()
-                    .map(|variant| variant.doc().long_about),
-            ),
+            split_terminator(subcmd.names, b'\0')
+                .zip(subcmd.variant_infos.iter().map(|info| info.help)),
         )
-    }
-
-    #[cfg(feature = "help")]
-    pub(crate) fn subcommand_optional(&self) -> bool {
-        self.subcmd_optional
     }
 
     // FIXME: Used by proc-macro for assertion.
@@ -235,10 +192,4 @@ impl RawArgsInfo {
             .ok()?;
         Some(self.named_attrs[i].1)
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CommandDoc {
-    pub(crate) long_about: &'static str,
-    pub(crate) after_long_help: &'static str,
 }

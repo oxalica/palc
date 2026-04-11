@@ -3,7 +3,7 @@ use quote::{ToTokens, quote};
 use syn::{Data, DataEnum, DeriveInput, Ident, Type};
 
 use crate::common::{CommandMeta, wrap_anon_item};
-use crate::derive_args::CommandDoc;
+use crate::derive_args::HelpDisplay;
 use crate::error::catch_errors;
 
 pub fn expand(input: &DeriveInput) -> TokenStream {
@@ -78,23 +78,12 @@ fn expand_for_enum<'a>(def: &'a DeriveInput, data: &'a DataEnum) -> SubcommandIm
 
             let (args_info, kind) = match &variant.fields {
                 syn::Fields::Unit => {
-                    let cmd_doc = CommandDoc(cmd_meta.as_deref());
-                    (
-                        quote! {
-                            &__rt::RawArgsInfo::new(
-                                "",
-                                &[],
-                                &[],
-                                __rt::None,
-                                false,
-                                false,
-                                #cmd_doc,
-                                &"",
-                                &[],
-                            )
-                        },
-                        VariantKind::Unit,
-                    )
+                    let help = HelpDisplay { parse: None, cmd_meta: cmd_meta.as_deref() }
+                        .to_token_stream();
+                    let info = quote! {
+                        &__rt::RawArgsInfo::new("", &[], &[], __rt::None, false, false, #help, &[])
+                    };
+                    (info, VariantKind::Unit)
                 }
                 syn::Fields::Unnamed(fields) => {
                     if fields.unnamed.len() != 1 {

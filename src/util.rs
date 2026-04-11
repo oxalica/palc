@@ -78,17 +78,6 @@ pub(crate) fn split_once(s: &str, b: u8) -> Option<(&str, &str)> {
     s.split_once(b as char)
 }
 
-pub(crate) fn split_sep_many<const N: usize>(mut s: &str, b: u8) -> Option<[&str; N]> {
-    assert!(b.is_ascii());
-    let mut arr = [""; N];
-    let (last, init) = arr.split_last_mut().unwrap();
-    for p in init {
-        (*p, s) = split_once(s, b)?;
-    }
-    *last = s;
-    Some(arr)
-}
-
 pub(crate) fn split_terminator(mut s: &str, b: u8) -> impl Iterator<Item = &str> + Clone {
     assert!(b.is_ascii());
     std::iter::from_fn(move || {

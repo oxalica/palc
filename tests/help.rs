@@ -86,7 +86,6 @@ fn assert_help<P: Parser>(args: &[&str], expect: Expect) {
 }
 
 #[test]
-#[ignore = "FIXME"]
 fn top_level() {
     assert_help::<ArgsCli>(
         &["me", "--help"],
