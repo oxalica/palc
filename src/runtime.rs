@@ -1,5 +1,7 @@
+#![expect(improper_ctypes_definitions, reason = "used as a nounwind marker")]
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
-use std::num::NonZero;
+use std::ops::ControlFlow;
 
 use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
@@ -9,8 +11,6 @@ use crate::error::ErrorKind;
 use crate::refl::{RawArgsInfo, RawSubcommandInfo};
 use crate::shared::ArgAttrs;
 use crate::values::ValueParser;
-
-use super::Error;
 
 //////// Random utility functions called by proc-macro ////////
 // 1. `extern "C"` for nounwind hint.
@@ -26,14 +26,12 @@ pub extern "C" fn unreachable_nounwind() -> ! {
 
 /// Commonly used: any non-`Option` non-`bool` argument will check this.
 #[cold]
-#[expect(improper_ctypes_definitions)]
 pub extern "C" fn error_missing_arg(info: &RawArgsInfo, idx: u8) -> Result<()> {
     Err(ErrorKind::MissingRequiredArgument.with_arg_idx(info, idx))
 }
 
 /// Commonly used: any non-`Option` subcommand will check this.
 #[cold]
-#[expect(improper_ctypes_definitions)]
 pub extern "C" fn error_missing_subcmd() -> Result<()> {
     Err(ErrorKind::MissingRequiredSubcommand.into())
 }
@@ -41,7 +39,6 @@ pub extern "C" fn error_missing_subcmd() -> Result<()> {
 /// Other relatively uncommon opt-in constraints: `exclusive`, `dependency`, `conflict`.
 // FIXME: Too many arguments. Maybe flatten into a single template?
 #[cold]
-#[expect(improper_ctypes_definitions)]
 pub extern "C" fn validate_constraints(
     info: &RawArgsInfo,
     isset: &[bool],
@@ -181,7 +178,6 @@ pub trait SubcommandPlace {
 }
 impl<S: Subcommand> SubcommandPlace for Option<S> {
     // This function must not unwind.
-    #[expect(improper_ctypes_definitions)]
     extern "C" fn __parse(
         &mut self,
         idx: usize,
@@ -205,17 +201,15 @@ impl dyn RunParser + '_ {
     /// Parse a unit struct.
     ///
     /// This is called on unit enum variants.
-    #[expect(improper_ctypes_definitions)]
     pub extern "C" fn run_unit(
         &mut self,
         parent: &mut dyn Frame,
         info: &RawArgsInfo,
     ) -> Result<()> {
-        self.run(&mut ArgsFrame { fields: &mut [], subcmd: None, info, parent })
+        self.run(&mut ArgsFrame { fields: &mut [], subcmd: None, info, parent, next_positional: 0 })
     }
 }
 impl<F: FnMut(&mut ArgsFrame) -> Result<()>> RunParser for F {
-    #[expect(improper_ctypes_definitions)]
     extern "C" fn run(&mut self, frame: &mut ArgsFrame) -> Result<()> {
         self(frame)
     }
@@ -238,7 +232,7 @@ impl<F: FnMut(&mut ArgsFrame) -> Result<()>> RunParser for F {
 pub trait Frame {
     fn search_named(
         &mut self,
-        enc_name: &str,
+        enc_name: &OsStr,
         global: bool,
     ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)>;
 
@@ -252,12 +246,17 @@ pub struct ArgsFrame<'a, 'b> {
     pub subcmd: Option<&'a mut dyn SubcommandPlace>,
     pub info: &'a RawArgsInfo,
     pub parent: &'a mut dyn Frame,
+
+    /// The next index to `info.positional_attrs` to parse.
+    /// There cannot be more than `u8::MAX - 1` arguments so this will not
+    /// overflow after parsing the last one.
+    pub next_positional: u8,
 }
 
 impl Frame for ArgsFrame<'_, '_> {
     fn search_named(
         &mut self,
-        enc_name: &str,
+        enc_name: &OsStr,
         global: bool,
     ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)> {
         match self.info.get_named(enc_name) {
@@ -291,7 +290,7 @@ struct CommandFrame<'a> {
 impl Frame for CommandFrame<'_> {
     fn search_named(
         &mut self,
-        enc_name: &str,
+        enc_name: &OsStr,
         _global: bool,
     ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)> {
         self.parent.search_named(enc_name, true)
@@ -309,7 +308,7 @@ impl Frame for CommandFrame<'_> {
 impl Frame for () {
     fn search_named(
         &mut self,
-        _enc_name: &str,
+        _enc_name: &OsStr,
         _global: bool,
     ) -> Option<(&mut dyn Parsable, &RawArgsInfo, ArgAttrs)> {
         None
@@ -544,165 +543,18 @@ impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
 
 pub struct RawParser<'i> {
     iter: &'i mut dyn Iterator<Item = OsString>,
-    /// If we are inside a short arguments bundle, the index of next short arg.
-    next_short_idx: Option<NonZero<usize>>,
+}
+
+impl<'i> RawParser<'i> {
+    pub(crate) fn new(iter: &'i mut dyn Iterator<Item = OsString>) -> Self {
+        Self { iter }
+    }
 }
 
 impl RunParser for RawParser<'_> {
-    #[expect(improper_ctypes_definitions)]
     extern "C" fn run(&mut self, frame: &mut ArgsFrame) -> Result<()> {
         run_parser(self, frame)
     }
-}
-
-fn run_parser(p: &mut RawParser, frame: &mut ArgsFrame) -> Result<()> {
-    // Move out the subcommand since we will borrow it mutably together with `frame`.
-    let mut subcmd = frame.subcmd.take();
-
-    let mut positional_attrs = frame.info.positional_attrs();
-    let mut after_dash_dash = false;
-
-    let mut buf = OsString::new();
-    while let Some(arg) =
-        if after_dash_dash { p.iter.next().map(RawArg::Positional) } else { p.next_arg(&mut buf)? }
-    {
-        match arg {
-            RawArg::EncodedNamed(enc_name, inline_value) => {
-                let Some((place, info, mut attrs)) = frame.search_named(enc_name, false) else {
-                    // TODO: Configurable help?
-                    #[cfg(feature = "help")]
-                    if enc_name == "h" || enc_name == "help" {
-                        return Err(Error::from(ErrorKind::Help).maybe_render_help(frame));
-                    }
-                    let mut dec_name = String::with_capacity(2 + enc_name.len());
-                    // TODO: Dedup this code with `Error::fmt`.
-                    if enc_name.chars().nth(1).is_none() {
-                        dec_name.push('-');
-                    } else if !enc_name.starts_with("--") {
-                        dec_name.push_str("--");
-                    }
-                    dec_name.push_str(enc_name);
-                    return Err(ErrorKind::UnknownNamedArgument.with_input(dec_name.into()));
-                };
-
-                let require_value = attrs.contains(ArgAttrs::REQUIRE_VALUE);
-                let require_eq = attrs.contains(ArgAttrs::REQUIRE_EQ);
-                // FIXME: Eliminate this clone.
-                let value_ret = match inline_value {
-                    RawInlineValue::Eq(v) => {
-                        attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
-                        Ok(v.to_owned())
-                    }
-                    RawInlineValue::None => {
-                        // NB: On `Option<Option<_>>` case (`!require_value && require_eq`),
-                        // we should accept standalone long arguments `--foo` as missing value.
-                        // Thus `require_value` checks first.
-                        if !require_value {
-                            Ok(OsString::new())
-                        } else if require_eq {
-                            Err(ErrorKind::MissingEq.into())
-                        } else {
-                            p.next_arg_as_value(attrs)
-                        }
-                    }
-                    RawInlineValue::Ambiguous(tail) => {
-                        // NB: On `Option<Option<_>>` case (`!require_value && require_eq`),
-                        // we should reject bundled arguments `-svalue` since `=` is required.
-                        // Thus `require_eq` checks first.
-                        if require_eq {
-                            Err(ErrorKind::MissingEq.into())
-                        } else if require_value {
-                            p.discard_short_args();
-                            attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
-                            Ok(tail.to_owned())
-                        } else {
-                            Ok(OsString::new())
-                        }
-                    }
-                };
-
-                match value_ret.and_then(|mut value| {
-                    if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
-                        value.make_ascii_lowercase();
-                    }
-                    place.parse_from(attrs, &value)
-                }) {
-                    Ok(()) => {}
-                    Err(err) => {
-                        let desc = info.get_description(attrs.get_index());
-                        return Err(err.with_arg_desc(desc).maybe_render_help(frame));
-                    }
-                }
-            }
-            RawArg::Positional(arg) => {
-                // Subcommand has priority, but only before `--`.
-                if !after_dash_dash
-                    && let Some(place) = &mut subcmd
-                    && let Some(subcmd_info) = &frame.info.subcmd_info
-                    && let Some((name, idx)) = subcmd_info.search(&arg)
-                {
-                    drop(arg);
-                    drop(buf);
-                    let mut frame = CommandFrame {
-                        #[cfg(feature = "help")]
-                        name,
-                        parent: frame,
-                    };
-                    #[cfg(not(feature = "help"))]
-                    {
-                        let _ = name;
-                    }
-                    return (**place).__parse(idx, &mut frame, p);
-                }
-
-                let attrs = if let Some((&attrs, rest)) = positional_attrs.split_first()
-                    && (after_dash_dash || !attrs.contains(ArgAttrs::LAST))
-                {
-                    // Advance only if this is not a va-arg.
-                    if !attrs.contains(ArgAttrs::VAR_ARG) {
-                        positional_attrs = rest;
-                    }
-                    attrs
-                } else if subcmd.is_some() {
-                    return Err(ErrorKind::UnknownSubcommand.with_input(arg));
-                } else {
-                    return Err(ErrorKind::ExtraPositionalArgument.with_input(arg));
-                };
-
-                let place = &mut *frame.fields[usize::from(attrs.get_index())];
-                place.parse_from(attrs, &arg)?;
-                if attrs.contains(ArgAttrs::GREEDY) {
-                    drop(arg);
-                    drop(buf);
-                    for arg in &mut *p.iter {
-                        place.parse_from(attrs, &arg)?;
-                    }
-                    return Ok(());
-                }
-            }
-            RawArg::DashDash => {
-                after_dash_dash = true;
-
-                // If there is a "last" argument, all further arguments goes into it.
-                if let Some(last) = positional_attrs.last()
-                    && last.contains(ArgAttrs::LAST)
-                {
-                    positional_attrs = std::slice::from_ref(last);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-enum RawArg<'a> {
-    /// "--"
-    DashDash,
-    /// Encoded arg name and an optional inline value.
-    EncodedNamed(&'a str, RawInlineValue<'a>),
-    /// A verbatim positional argument.
-    Positional(OsString),
 }
 
 #[derive(Debug)]
@@ -716,117 +568,198 @@ enum RawInlineValue<'a> {
     Ambiguous(&'a OsStr),
 }
 
-impl<'i> RawParser<'i> {
-    pub(crate) fn new(iter: &'i mut dyn Iterator<Item = OsString>) -> Self {
-        Self { iter, next_short_idx: None }
-    }
+fn run_parser(p: &mut RawParser, frame: &mut ArgsFrame) -> Result<()> {
+    // Move out the subcommand since we will borrow it mutably together with `frame`.
+    let mut subcmd = frame.subcmd.take();
 
-    /// Iterate the next logical argument, possibly splitting short argument bundle.
-    fn next_arg<'b>(&mut self, buf: &'b mut OsString) -> Result<Option<RawArg<'b>>> {
-        #[cold]
-        fn fail_on_next_short_arg(rest: &OsStr) -> Error {
-            let bytes = rest.as_encoded_bytes();
-            let mut dash_arg = OsString::new();
-            // Add back the `-` prefix to signify this is parsed as a short named argument.
-            dash_arg.push("-");
-
-            // UTF-8 length of a char must be 1..=4, len==1 case is checked outside.
-            for len in 2..=bytes.len().min(4) {
-                if let Ok(s) = std::str::from_utf8(&bytes[..len]) {
-                    dash_arg.push(s);
-                    return ErrorKind::UnknownNamedArgument.with_input(dash_arg);
-                }
+    'next_arg: while let Some(arg) = p.iter.next() {
+        if arg == "--" {
+            // If there is a "last" argument, all further arguments goes into it.
+            if let Some(last_attrs) = frame.info.positional_attrs.last()
+                && last_attrs.contains(ArgAttrs::LAST)
+            {
+                frame.next_positional = frame.info.positional_len() as u8 - 1;
             }
-
-            // There is not a single valid UTF-8 char. Note that we cannot construct `OsStr` from `u8`.
-            // Just dump all the invalid data back to the user.
-            dash_arg.push(rest);
-            ErrorKind::UnknownNamedArgument.with_input(dash_arg)
-        }
-
-        if let Some(pos) = self.next_short_idx.filter(|pos| pos.get() < buf.len()) {
-            let argb = buf.as_encoded_bytes();
-            let idx = pos.get();
-
-            // By struct invariant, argb[..idx] must be UTF-8.
-            let next_byte = std::str::from_utf8(&argb[idx..idx + 1]);
-            // Assuming all valid short args are ASCII, if the next byte is not ASCII, it must fail.
-            let short_arg = next_byte.map_err(|_| fail_on_next_short_arg(buf.index(idx..)))?;
-
-            self.next_short_idx = pos.checked_add(1);
-            let inline_value = match argb.get(idx + 1) {
-                Some(&b'=') => {
-                    // `=` must be consumed as a inlined value, not a short argument.
-                    self.discard_short_args();
-                    RawInlineValue::Eq(buf.index(idx + 2..))
-                }
-                Some(_) => RawInlineValue::Ambiguous(buf.index(idx + 1..)),
-                None => {
-                    // Reached the end of bundle.
-                    self.discard_short_args();
-                    RawInlineValue::None
-                }
-            };
-            return Ok(Some(RawArg::EncodedNamed(short_arg, inline_value)));
-        }
-        self.next_short_idx = None;
-
-        // Otherwise, fetch the next input argument.
-        *buf = match self.iter.next() {
-            Some(raw) => raw,
-            None => return Ok(None),
-        };
-
-        if buf.starts_with("--") {
-            if buf.len() == 2 {
-                return Ok(Some(RawArg::DashDash));
+            drop(arg);
+            while let Some(arg) = p.iter.next() {
+                visit_positional(p, frame, true, arg)?;
             }
-            // Using `strip_prefix` in if-condition requires polonius to make lifetime check.
-            let rest = buf.index(2..);
-            let (name, inline_value) = match rest.split_once('=') {
+            return Ok(());
+        } else if arg.starts_with("--") {
+            let (name, value) = match arg.split_once("=") {
                 Some((name, value)) => (name, RawInlineValue::Eq(value)),
-                None => (rest, RawInlineValue::None),
+                None => (&*arg, RawInlineValue::None),
             };
-            // Include proceeding "--" only for single-char long arguments.
-            let enc_name = if name.len() != 1 { name } else { buf.index(..3) };
-            let enc_name = enc_name
-                .to_str()
-                .ok_or_else(|| ErrorKind::UnknownNamedArgument.with_input(enc_name.into()))?;
-            Ok(Some(RawArg::EncodedNamed(enc_name, inline_value)))
-        } else if buf.starts_with("-") && buf.len() != 1 {
-            self.next_short_idx = Some(NonZero::new(1).unwrap());
-            self.next_arg(buf)
+            let _: ControlFlow<()> = visit_named(p, frame, false, name, value)?;
+        } else if let Some(bundle) = arg.strip_prefix("-")
+            // NB: A single "-" is treated as a normal positional argument.
+            && !bundle.is_empty()
+        {
+            let chunk = bundle.as_encoded_bytes().utf8_chunks().next().unwrap();
+            // WAIT: MSRV 1.93 for `char::MAX_LEN_UTF8`
+            let mut buf = [0u8; 4];
+            for (idx, ch) in chunk.valid().char_indices() {
+                let enc_name = ch.encode_utf8(&mut buf);
+                let after = bundle.index(idx + enc_name.len()..);
+                let value = match after.strip_prefix("=") {
+                    Some(value) => RawInlineValue::Eq(value),
+                    None if !after.is_empty() => RawInlineValue::Ambiguous(after),
+                    None => RawInlineValue::None,
+                };
+                if visit_named(p, frame, true, enc_name.as_ref(), value)?.is_break() {
+                    continue 'next_arg;
+                }
+            }
+            if !chunk.invalid().is_empty() {
+                // Because we disallow non-UTF-8 named argument, this `visit_named` must fail
+                // and produce an error rendering the rest of the input junk.
+                let rest = bundle.index(chunk.valid().len()..);
+                return Err(visit_named(p, frame, true, rest, RawInlineValue::None).unwrap_err());
+            }
         } else {
-            Ok(Some(RawArg::Positional(std::mem::take(buf))))
+            // Subcommand always has priority over positional arguments.
+            // This aligns with clap, `subcommand_precedence_over_arg` only affect `num_args=1..` but not this.
+            // See: <https://github.com/clap-rs/clap/issues/5513>
+            if let Some(place) = &mut subcmd
+                && let Some(subcmd_info) = &frame.info.subcmd_info
+                && let Some((name, idx)) = subcmd_info.search(&arg)
+            {
+                let mut frame = CommandFrame {
+                    #[cfg(feature = "help")]
+                    name,
+                    parent: frame,
+                };
+                #[cfg(not(feature = "help"))]
+                {
+                    let _ = name;
+                }
+                drop(arg);
+                return (**place).__parse(idx, &mut frame, p);
+            }
+
+            visit_positional(p, frame, false, arg)?;
         }
     }
+    Ok(())
+}
 
-    /// Discard the rest of short argument bundle, poll a new raw argument on next `next_arg`.
-    fn discard_short_args(&mut self) {
-        self.next_short_idx = None;
+fn visit_positional(
+    p: &mut RawParser<'_>,
+    frame: &mut ArgsFrame<'_, '_>,
+    is_last: bool,
+    arg: OsString,
+) -> Result<()> {
+    let attrs = if let Some(&attrs) =
+        frame.info.positional_attrs.get(usize::from(frame.next_positional))
+        && (is_last || !attrs.contains(ArgAttrs::LAST))
+    {
+        attrs
+    } else if frame.info.subcmd_info.is_some() {
+        return Err(ErrorKind::UnknownSubcommand.with_input(arg));
+    } else {
+        return Err(ErrorKind::ExtraPositionalArgument.with_input(arg));
+    };
+
+    // Advance only if this is not a va-arg.
+    if !attrs.contains(ArgAttrs::VAR_ARG) {
+        frame.next_positional += 1;
     }
 
-    /// Consume the next argument as an outlined value for named argument.
-    ///
-    /// If the next raw argument starts with `-` and `attrs` disallows it, an
-    /// error will be returned.
-    fn next_arg_as_value(&mut self, attrs: ArgAttrs) -> Result<OsString> {
-        assert!(self.next_short_idx.is_none());
-        self.iter
-            .next()
-            .filter(|raw| {
-                let raw = raw.as_encoded_bytes();
-                if raw == b"-" || !raw.starts_with(b"-") {
-                    return true;
+    let place = &mut *frame.fields[usize::from(attrs.get_index())];
+    place.parse_from(attrs, &arg)?;
+    if attrs.contains(ArgAttrs::GREEDY) {
+        for arg in &mut *p.iter {
+            place.parse_from(attrs, &arg)?;
+        }
+        // Everything is consumed here. The outer loop should exit as well.
+    }
+    Ok(())
+}
+
+fn visit_named(
+    p: &mut RawParser,
+    frame: &mut ArgsFrame,
+    is_short: bool,
+    enc_name: &OsStr,
+    inline_value: RawInlineValue<'_>,
+) -> Result<ControlFlow<()>> {
+    let Some((place, info, mut attrs)) = frame.search_named(enc_name, false) else {
+        // TODO: Configurable help?
+        #[cfg(feature = "help")]
+        if enc_name == "h" || enc_name == "--help" {
+            return Err(crate::Error::from(ErrorKind::Help).maybe_render_help(frame));
+        }
+
+        let mut input_arg = OsString::with_capacity(1 + enc_name.len());
+        if is_short {
+            input_arg.push("-");
+        }
+        input_arg.push(enc_name);
+        return Err(ErrorKind::UnknownNamedArgument.with_input(input_arg));
+    };
+
+    let require_value = attrs.contains(ArgAttrs::REQUIRE_VALUE);
+    let require_eq = attrs.contains(ArgAttrs::REQUIRE_EQ);
+    let ret = match inline_value {
+        RawInlineValue::Eq(v) => {
+            attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
+            Ok(Cow::Borrowed(v))
+        }
+        RawInlineValue::None => {
+            // NB: On `Option<Option<_>>` case (`!require_value && require_eq`),
+            // we should accept standalone long arguments `--foo` as missing value.
+            // Thus `require_value` checks first.
+            if !require_value {
+                Ok(Cow::Borrowed("".as_ref()))
+            } else if require_eq {
+                Err(ErrorKind::MissingEq.into())
+            } else {
+                match p.iter.next().filter(|raw| {
+                    let raw = raw.as_encoded_bytes();
+                    if raw == b"-"
+                        || !raw.starts_with(b"-")
+                        || attrs.contains(ArgAttrs::ACCEPT_HYPHEN_ANY)
+                    {
+                        true
+                    } else if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_NUM) {
+                        raw[1..].iter().all(|b| b.is_ascii_digit())
+                    } else {
+                        false
+                    }
+                }) {
+                    Some(value) => Ok(Cow::Owned(value)),
+                    None => Err(ErrorKind::MissingValue.into()),
                 }
-                if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_ANY) {
-                    true
-                } else if attrs.contains(ArgAttrs::ACCEPT_HYPHEN_NUM) {
-                    raw[1..].iter().all(|b| b.is_ascii_digit())
-                } else {
-                    false
-                }
-            })
-            .ok_or_else(|| ErrorKind::MissingValue.into())
+            }
+        }
+        RawInlineValue::Ambiguous(tail) => {
+            // NB: On `Option<Option<_>>` case (`!require_value && require_eq`),
+            // we should reject bundled arguments `-svalue` since `=` is required.
+            // Thus `require_eq` checks first.
+            if require_eq {
+                Err(ErrorKind::MissingEq.into())
+            } else if require_value {
+                attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
+                Ok(Cow::Borrowed(tail))
+            } else {
+                Ok(Cow::Borrowed("".as_ref()))
+            }
+        }
+    }
+    .and_then(|mut value| {
+        if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
+            value.to_mut().make_ascii_lowercase();
+        }
+        place.parse_from(attrs, &value)
+    });
+
+    match ret {
+        Ok(()) => {
+            Ok(if require_value { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
+        }
+        Err(err) => {
+            let desc = info.get_description(attrs.get_index());
+            Err(err.with_arg_desc(desc).maybe_render_help(frame))
+        }
     }
 }

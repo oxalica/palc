@@ -13,6 +13,12 @@ use crate::common::{
 use crate::error::{Result, catch_errors};
 use crate::shared::ArgAttrs;
 
+/// This limitation exists because:
+/// 1. We want to use a `u8` index inside `ArgAttrs`.
+/// 2. Positional argument counter `ArgsFrame::next_positional` will end with
+///    the number of positional arguments. We don't want to overflow it.
+const MAX_FIELD_LEN: usize = (u8::MAX - 1) as usize;
+
 pub fn expand(input: &DeriveInput) -> TokenStream {
     assert_no_generics!(input);
 
@@ -252,28 +258,13 @@ fn encode_long_name(name: &LitStr) -> String {
     } else if s.contains(|c: char| c == '=' || c.is_ascii_control()) {
         emit_error!(name, "arg(long) name must NOT contain '=' or ASCII control characters");
     }
-    if s.len() > 1 {
-        s
-    } else {
-        // Disambiguate from short names.
-        format!("--{s}")
-    }
+    format!("--{s}")
 }
 
 fn encode_short_name(name: &LitChar) -> String {
     let c = name.value();
-    if c == '-' || c.is_ascii_control() {
-        emit_error!(name, "arg(short) name must NOT be '-' or ASCII control characters");
-    } else if !c.is_ascii() {
-        // NB. It is assumed to be ASCII in `refl::NamedArgInfo::short_args()` and
-        // `RawParser::next_arg()`.
-        emit_error!(
-            name,
-            "Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \
-            A unicode codepoint is not necessarity a \"character\" in human sense, thus \
-            automatic splitting or argument de-bundling may give unexpected results. \
-            If you do want this to be supported, convince us by opening an issue.",
-        );
+    if c == '-' || c == '=' || c.is_ascii_control() {
+        emit_error!(name, "arg(short) name must NOT be '-', '=' or ASCII control characters");
     }
     c.into()
 }
@@ -285,8 +276,8 @@ pub fn expand_args_parse<'i>(
 ) -> Result<ArgsParse<'i>> {
     let fields = &input_fields.named;
 
-    if u8::try_from(fields.len()).is_err() {
-        abort!(input_fields, "only up to 255 fields are supported");
+    if fields.len() > MAX_FIELD_LEN {
+        abort!(input_fields, "only up to {MAX_FIELD_LEN} fields are supported");
     }
 
     let mut named_fields = Vec::with_capacity(fields.len());
@@ -719,6 +710,7 @@ impl ToTokens for ArgsParse<'_> {
                 subcmd: #subcmd_param,
                 info: __info,
                 parent: __frame,
+                next_positional: 0u8,
             })
         };
         // TODO: Add tests about the order of flattened Args.

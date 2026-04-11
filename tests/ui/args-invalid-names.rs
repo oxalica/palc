@@ -11,10 +11,10 @@ struct Cli {
 
     #[arg(short = '-')]
     short_dash: i32,
-    #[arg(short = '坏')]
-    short_unicode: i32,
-    #[arg(short)]
-    首字符Unicode: i32,
+    #[arg(short = '=')]
+    short_eq: bool,
+    #[arg(short = '\x1e')]
+    short_control: bool,
 }
 
 fn main() {}

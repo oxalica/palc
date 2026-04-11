@@ -22,20 +22,20 @@ error: arg(long) name must NOT contain '=' or ASCII control characters
 9 |     #[arg(long = "a=b")]
   |                  ^^^^^
 
-error: arg(short) name must NOT be '-' or ASCII control characters
+error: arg(short) name must NOT be '-', '=' or ASCII control characters
   --> tests/ui/args-invalid-names.rs:12:19
    |
 12 |     #[arg(short = '-')]
    |                   ^^^
 
-error: Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. A unicode codepoint is not necessarity a "character" in human sense, thus automatic splitting or argument de-bundling may give unexpected results. If you do want this to be supported, convince us by opening an issue.
+error: arg(short) name must NOT be '-', '=' or ASCII control characters
   --> tests/ui/args-invalid-names.rs:14:19
    |
-14 |     #[arg(short = '坏')]
-   |                   ^^^^
+14 |     #[arg(short = '=')]
+   |                   ^^^
 
-error: Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. A unicode codepoint is not necessarity a "character" in human sense, thus automatic splitting or argument de-bundling may give unexpected results. If you do want this to be supported, convince us by opening an issue.
-  --> tests/ui/args-invalid-names.rs:17:5
+error: arg(short) name must NOT be '-', '=' or ASCII control characters
+  --> tests/ui/args-invalid-names.rs:16:19
    |
-17 |     首字符Unicode: i32,
-   |     ^^^^^^^^^^^^^
+16 |     #[arg(short = '\x1e')]
+   |                   ^^^^^^

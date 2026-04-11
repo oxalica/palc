@@ -63,13 +63,16 @@ pub struct RawArgsInfo {
     /// `-s`, `--long`, `-s, --long=<VALUE>`, `<REQUIRED>`, or `[OPTIONAL]`.
     descriptions: &'static str,
 
-    /// Mapping named arguments into its attributes.
+    /// Mapping "encoded" named arguments into its attributes.
     /// They are sorted by names for binary searching.
+    ///
+    /// - Long arguments are encoded as-is, eg. "--long".
+    /// - Short arguments are encoded without dash prefix, eg. "F".
     // FIXME: Use index into `descriptions` instead of `&str`.
     named_attrs: &'static [(&'static str, ArgAttrs)],
 
     /// Attributes of positional arguments.
-    positional_attrs: &'static [ArgAttrs],
+    pub(crate) positional_attrs: &'static [ArgAttrs],
 
     /// Child subcommands.
     ///
@@ -225,13 +228,12 @@ impl RawArgsInfo {
         self.positional_attrs.len()
     }
 
-    pub(crate) fn get_named(&self, name: &str) -> Option<ArgAttrs> {
-        let i = self.named_attrs.binary_search_by_key(&name, |(key, _)| *key).ok()?;
+    pub(crate) fn get_named(&self, name: &OsStr) -> Option<ArgAttrs> {
+        let i = self
+            .named_attrs
+            .binary_search_by_key(&name.as_encoded_bytes(), |(key, _)| key.as_bytes())
+            .ok()?;
         Some(self.named_attrs[i].1)
-    }
-
-    pub(crate) fn positional_attrs(&self) -> &[ArgAttrs] {
-        self.positional_attrs
     }
 }
 

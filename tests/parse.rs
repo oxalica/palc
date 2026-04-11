@@ -43,11 +43,24 @@ fn short() {
         debug: bool,
         #[arg(short)]
         file: Option<String>,
+        #[arg(short = '我')]
+        me: bool,
+        #[arg(long = "我")]
+        long_me: bool,
     }
 
-    check(["", "-dvf-"], &Cli { verbose: true, debug: true, file: Some("-".into()) });
-    check(["", "-f=-", "-v"], &Cli { verbose: true, debug: false, file: Some("-".into()) });
-    check(["", "-d", "-f", "-", "-v"], &Cli { verbose: true, debug: true, file: Some("-".into()) });
+    check(
+        ["", "-dv我f-"],
+        &Cli { verbose: true, debug: true, file: Some("-".into()), me: true, long_me: false },
+    );
+    check(
+        ["", "-f=-", "-v"],
+        &Cli { verbose: true, debug: false, file: Some("-".into()), me: false, long_me: false },
+    );
+    check(
+        ["", "-d", "-f", "-", "-v", "--我"],
+        &Cli { verbose: true, debug: true, file: Some("-".into()), me: false, long_me: true },
+    );
 }
 
 #[test]
@@ -552,8 +565,8 @@ fn value_delimiter() {
     }
 
     check(
-        ["", "--features", "a,b", "-F", "c", "-F=d,e", "--features="],
-        &Cli { features: ["a", "b", "c", "d", "e", ""].map(Into::into).into() },
+        ["", "--features", "a,b", "-F", "c", "-F=d,e", "-Ff", "--features="],
+        &Cli { features: ["a", "b", "c", "d", "e", "f", ""].map(Into::into).into() },
     );
 }
 
