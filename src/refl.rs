@@ -105,6 +105,7 @@ impl RawArgsInfo {
     pub const EMPTY_REF: &'static Self = &Self::new("", &[], &[], None, false, false, &"", &[]);
 
     // Used by proc-macro.
+    #[expect(clippy::too_many_arguments, reason = "proc-macro needs to pass this many information")]
     pub const fn new(
         descriptions: &'static str,
         named_attrs: &'static [(&'static str, ArgAttrs)],
