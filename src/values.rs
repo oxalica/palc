@@ -15,9 +15,6 @@ mod sealed {
 #[inline(always)]
 fn cold_path() {}
 
-/// Value types that are parsable from raw `&OsStr`.
-///
-/// It behaves like a `clap::ValueParser` but in type-level.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be parsed into a palc argument value",
     label = "unparsable value type",
@@ -26,8 +23,23 @@ fn cold_path() {}
     `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or \
     `impl std::error::Error + Send + Sync`"
 )]
+trait InferValueParserOk {}
+
+// We generate `AssertInferOk = UserType` on the error fallback path, to force
+// an unimplemented message of trait `InferValueParserOk`.
+// We pick `String` as the OK tag which must not collide with `UserType`,
+// because it would be inferred into `TryFromOsStrParser` in a former stage
+// and never goes into the error path.
+type InferOkTag = String;
+#[diagnostic::do_not_recommend]
+impl InferValueParserOk for InferOkTag {}
+
+/// Value types that are parsable from raw `&OsStr`.
+///
+/// It behaves like a `clap::ValueParser` but in type-level.
 pub trait ValueParser: Sized + sealed::Sealed + 'static {
     type Output: Sized;
+    type AssertInferOk;
 
     /// Possible input strings terminated by NUL.
     const POSSIBLE_INPUTS_NUL: &'static str = "";
@@ -101,7 +113,13 @@ pub trait InferValueParser<T> {
 }
 
 // This function is displayed in error message, thus describes itself in its name.
-pub fn assert_auto_infer_value_parser_ok<P: ValueParser>(p: P) -> P {
+// The bound is written in such a way that a `ValueParser` inference error would only
+// produce a single error with a customized message, but keep all other type
+// inference going smoothly without spamming errors.
+#[expect(private_bounds, reason = "opaque to proc-macro")]
+pub fn assert_auto_infer_value_parser_ok<P: ValueParser<AssertInferOk: InferValueParserOk>>(
+    p: P,
+) -> P {
     p
 }
 
@@ -116,9 +134,9 @@ impl<T: ValueEnum + 'static> InferValueParser<T> for &&&PhantomData<T> {
 
 pub struct ValueEnumParser<T>(PhantomData<T>);
 impl<T> sealed::Sealed for ValueEnumParser<T> {}
-#[diagnostic::do_not_recommend]
 impl<T: ValueEnum + 'static> ValueParser for ValueEnumParser<T> {
     type Output = T;
+    type AssertInferOk = InferOkTag;
     const POSSIBLE_INPUTS_NUL: &'static str = T::POSSIBLE_INPUTS_NUL;
 
     fn parse(v: &OsStr) -> Result<T> {
@@ -171,12 +189,12 @@ where
 
 pub struct TryFromOsStrParser<T>(PhantomData<T>);
 impl<T> sealed::Sealed for TryFromOsStrParser<T> {}
-#[diagnostic::do_not_recommend]
 impl<T> ValueParser for TryFromOsStrParser<T>
 where
     T: for<'a> TryFrom<&'a OsStr, Error: Into<DynStdError>> + 'static,
 {
     type Output = T;
+    type AssertInferOk = InferOkTag;
     fn parse(v: &OsStr) -> Result<T> {
         match T::try_from(v) {
             Ok(value) => Ok(value),
@@ -202,12 +220,12 @@ where
 
 pub struct FromStrParser<T>(PhantomData<T>);
 impl<T> sealed::Sealed for FromStrParser<T> {}
-#[diagnostic::do_not_recommend]
 impl<T> ValueParser for FromStrParser<T>
 where
     T: FromStr<Err: Into<DynStdError>> + 'static,
 {
     type Output = T;
+    type AssertInferOk = InferOkTag;
     fn parse(v: &OsStr) -> Result<T> {
         let err = match <&str>::try_from(v) {
             Ok(s) => match s.parse::<T>() {
@@ -224,12 +242,24 @@ where
 // Level 0
 
 // For error reporting.
-// Since `ValueParser` is sealed and all implementations are private, this user type is guaranteed
-// to cause an unimplemented error on `ValueParser`.
 impl<T> InferValueParser<T> for PhantomData<T> {
-    type Output = T;
+    type Output = FallbackValueParser<T>;
     fn __palc_infer_value_parser(self) -> Self::Output {
-        const { unreachable!() }
+        unimplemented!()
+    }
+}
+
+// This implements `ValueParser` to let type checking continue
+// (unsizing `&dyn Parsable`, calling `Parsable::method`, and etc), without
+// spamming errors on each usage.
+// See also `assert_auto_infer_value_parser_ok`.
+pub struct FallbackValueParser<T>(PhantomData<T>);
+impl<T: 'static> sealed::Sealed for FallbackValueParser<T> {}
+impl<T: 'static> ValueParser for FallbackValueParser<T> {
+    type Output = T;
+    type AssertInferOk = T;
+    fn parse(_: &OsStr) -> Result<Self::Output> {
+        unimplemented!()
     }
 }
 
@@ -271,7 +301,7 @@ fn infer_value_parser() {
     let _ = || {
         struct MyType;
 
-        let () = infer!(());
-        let _: MyType = infer!(MyType);
+        let _: FallbackValueParser<()> = infer!(());
+        let _: FallbackValueParser<MyType> = infer!(MyType);
     };
 }

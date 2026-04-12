@@ -30,7 +30,6 @@ help = []
 [dependencies]
 os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_os_str"] }
 palc-derive = { path = "./derive", version = "=0.0.2" }
-ref-cast = "1.0.24"
 
 [dev-dependencies]
 expect-test = "1.5.1"

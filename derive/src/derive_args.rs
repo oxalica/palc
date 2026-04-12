@@ -122,7 +122,6 @@ struct FieldInfo<'i> {
     kind: MagicKind,
     /// The type used for parser inference, with `Option`/`Vec` stripped.
     value_ty: &'i syn::Type,
-    value_parser: ValueParser<'i>,
 
     // Arg configurable //
     /// Encoded names for matching. Empty for positional arguments.
@@ -145,20 +144,6 @@ struct FieldInfo<'i> {
     description: String,
     doc: Doc,
     hide: bool,
-}
-
-struct ValueParser<'i>(&'i syn::Type);
-
-impl ToTokens for ValueParser<'_> {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let ty = self.0;
-        // See also `palc::values::InferValueParser`.
-        tokens.extend(quote_spanned! {ty.span()=>
-            __rt::assert_auto_infer_value_parser_ok(
-                (&&&__rt::PhantomData::<#ty>).__palc_infer_value_parser()
-            )
-        });
-    }
 }
 
 enum DefaultValue {
@@ -212,22 +197,40 @@ impl MagicKind {
         }
     }
 
-    fn place_ty(self, value_ty: &syn::Type) -> TokenStream {
+    fn initializer(self, value_ty: &syn::Type) -> TokenStream {
+        // See also `palc::values::InferValueParser`.
+        let value_parser = quote_spanned! {value_ty.span()=>
+            __rt::assert_auto_infer_value_parser_ok(
+                (&&&__rt::PhantomData::<#value_ty>).__palc_infer_value_parser()
+            )
+        };
         match self {
-            MagicKind::Bool => quote! { __rt::FlagPlace },
-            MagicKind::Value | MagicKind::Option => quote! { __rt::SetValuePlace<#value_ty> },
-            MagicKind::OptionOption => quote! { __rt::SetOptionalValuePlace<#value_ty> },
-            MagicKind::Vec | MagicKind::OptionVec => quote! { __rt::VecPlace<#value_ty> },
+            MagicKind::Bool => quote! { __rt::FlagPlace(false) },
+            MagicKind::Value | MagicKind::Option => {
+                quote! { __rt::SetValuePlace(__rt::None, #value_parser) }
+            }
+            MagicKind::OptionOption => {
+                quote! { __rt::SetOptionalValuePlace(__rt::None, #value_parser) }
+            }
+            MagicKind::Vec | MagicKind::OptionVec => {
+                quote! { __rt::VecPlace(__rt::None, #value_parser) }
+            }
         }
     }
 
-    fn finalizer(self) -> TokenStream {
+    fn extractor(self) -> TokenStream {
         match self {
-            MagicKind::Bool | MagicKind::Vec | MagicKind::Value => {
-                quote! { finish }
+            MagicKind::Bool
+            | MagicKind::OptionVec
+            | MagicKind::Option
+            | MagicKind::OptionOption => {
+                quote! { .0 }
             }
-            MagicKind::Option | MagicKind::OptionOption | MagicKind::OptionVec => {
-                quote! { finish_opt }
+            MagicKind::Value => {
+                quote! { .0 .unwrap() }
+            }
+            MagicKind::Vec => {
+                quote! { .0 .unwrap_or_default() }
             }
         }
     }
@@ -491,7 +494,6 @@ pub fn expand_args_parse<'i>(
                 ident,
                 kind,
                 value_ty,
-                value_parser: ValueParser(value_ty),
                 enc_names,
                 attrs,
                 required,
@@ -543,7 +545,6 @@ pub fn expand_args_parse<'i>(
                 ident,
                 kind,
                 value_ty,
-                value_parser: ValueParser(value_ty),
                 enc_names: Vec::new(),
                 attrs,
                 required,
@@ -648,26 +649,25 @@ pub fn expand_args_parse<'i>(
 impl ToTokens for ArgsParse<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         // Local variables.
-        let (field_idents, place_tys, finalizers) = self
+        let (state_idents, state_initializers, state_extractors) = self
             .direct_fields
             .iter()
             .map(|FieldInfo { ident, value_ty, kind, .. }| {
-                let fin = kind.finalizer();
-                (*ident, kind.place_ty(value_ty), quote! { __rt::FieldState::#fin(&mut #ident) })
+                (*ident, kind.initializer(value_ty), kind.extractor())
             })
             .chain(self.flatten_fields.iter().map(|FlattenFieldInfo { ident, ty }| {
-                (*ident, quote! { __rt::Option<#ty> }, quote! { #ident.unwrap() })
+                (*ident, quote! { __rt::None::<#ty> }, quote! { .unwrap() })
             }))
             .chain(self.subcommand.as_ref().map(|SubcommandInfo { ident, ty, optional }| {
-                let unwrap = (!*optional).then(|| quote! { .unwrap() });
-                (*ident, quote! { __rt::Option<#ty> }, quote! { #ident #unwrap })
+                let maybe_unwrap = if *optional {
+                    quote! {}
+                } else {
+                    quote! { .unwrap() }
+                };
+                (*ident, quote! { __rt::None::<#ty> }, maybe_unwrap)
             }))
             .collect::<(Vec<_>, Vec<_>, Vec<_>)>();
-
-        let field_array_iter =
-            self.direct_fields.iter().map(|FieldInfo { ident, value_parser, .. }| {
-                quote! { __rt::FieldState::place(&mut #ident, #value_parser) }
-            });
+        let direct_field_idents = self.direct_fields.iter().map(|f| f.ident);
 
         // Assertions to be forced to evaluate.
         let mut asserts = TokenStream::new();
@@ -728,15 +728,15 @@ impl ToTokens for ArgsParse<'_> {
         tokens.extend(quote! {
             #asserts
 
-            #(let mut #field_idents = <#place_tys as __rt::Default>::default();)*
-            let __fields: &mut [&mut dyn __rt::Parsable; _] = &mut [ #(#field_array_iter),* ];
+            #(let mut #state_idents = #state_initializers;)*
+            let __fields: &mut [&mut dyn __rt::Parsable; _] = &mut [#(&mut #direct_field_idents),*];
 
             #run_parser?;
 
             #validate_finish
 
             *__out = __rt::Some(#output_ctor {
-                #(#field_idents : #finalizers,)*
+                #(#state_idents : #state_idents #state_extractors,)*
             });
             __rt::Ok(())
         });
@@ -757,7 +757,7 @@ impl ToTokens for ValidateFinish<'_> {
             .direct_fields
             .iter()
             .map(|FieldInfo { ident, .. }| {
-                quote! { __rt::FieldState::is_set(&#ident) }
+                quote! { __rt::Parsable::is_set(&#ident) }
             })
             // Include the subcommand for exclusiveness check.
             .chain(def.subcommand.as_ref().map(|SubcommandInfo { ident, .. }| {
@@ -810,7 +810,7 @@ impl ToTokens for ValidateFinish<'_> {
             let idx = f.attrs.get_index();
             if f.required {
                 tokens.extend(quote! {
-                    if !__rt::FieldState::is_set(&#ident) {
+                    if !__rt::Parsable::is_set(&#ident) {
                         return __rt::error_missing_arg(__info, #idx);
                     }
                 });
@@ -829,14 +829,14 @@ impl ToTokens for ValidateFinish<'_> {
         }
 
         // Set default values after checks.
-        for FieldInfo { ident, default_value, value_parser, .. } in &def.direct_fields {
+        for FieldInfo { ident, default_value, .. } in &def.direct_fields {
             let Some(default_value) = default_value else { continue };
             tokens.extend(match default_value {
                 DefaultValue::ValueExpr(e) => quote! {
-                    __rt::FieldState::set_default(&mut #ident, || #e);
+                    __rt::Parsable::set_default(&mut #ident, || #e);
                 },
                 DefaultValue::ParseStr(s) => quote! {
-                    __rt::FieldState::set_default_parse(&mut #ident, #s, #value_parser);
+                    __rt::Parsable::set_default_parse(&mut #ident, #s);
                 },
             });
         }

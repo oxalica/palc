@@ -4,7 +4,6 @@ use std::ffi::{OsStr, OsString};
 use std::ops::ControlFlow;
 
 use os_str_bytes::OsStrBytesExt;
-use ref_cast::RefCast;
 
 use crate::Result;
 use crate::error::ErrorKind;
@@ -320,29 +319,38 @@ impl Frame for () {
 
 /// Type-erased objects that can be parsed into.
 pub trait Parsable {
+    type Value
+    where
+        Self: Sized;
+
+    type Output
+    where
+        Self: Sized;
+
     /// `value` is extracted from either inlined or the next argument.
     /// It is empty for argument that accepts no value.
     fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()>;
-}
 
-/// A state for parsing a field.
-pub trait FieldState: Default {
-    type Value;
-    type Output;
-    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable;
-    fn finish(&mut self) -> Self::Output;
-    fn finish_opt(&mut self) -> Option<Self::Output>;
-    fn is_set(&self) -> bool;
-    // NB. This is the default output value, i.e. the default type is `Vec<T>` for multi-args.
-    fn set_default(&mut self, f: impl FnOnce() -> Self::Output);
-    fn set_default_parse<P: ValueParser<Output = Self::Value>>(&mut self, default: &str, p: P) {
+    fn is_set(&self) -> bool
+    where
+        Self: Sized;
+
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output)
+    where
+        Self: Sized;
+
+    fn set_default_parse(&mut self, default: &str)
+    where
+        Self: Sized,
+    {
         #[inline(never)]
         fn set_from_default_dyn(p: &mut dyn Parsable, default: &OsStr) {
-            p.parse_from(ArgAttrs::default(), default.as_ref()).expect("invalid default value");
+            // FIXME: Is `ArgAttrs::default()` correct here?
+            p.parse_from(ArgAttrs::default(), default).expect("invalid default value");
         }
 
         if !self.is_set() {
-            set_from_default_dyn(self.place(p), default.as_ref());
+            set_from_default_dyn(self, default.as_ref());
         }
     }
 }
@@ -352,31 +360,12 @@ pub trait FieldState: Default {
 /// A value-less named argument, so-called flag.
 ///
 /// `--flag` set the state to `true`. Multiple occurrences are rejected.
-#[derive(Default)]
-pub struct FlagPlace(bool);
+pub struct FlagPlace(pub bool);
 
-impl FieldState for FlagPlace {
+impl Parsable for FlagPlace {
     type Value = bool;
     type Output = bool;
-    fn place<P: ValueParser<Output = bool>>(&mut self, _: P) -> &mut dyn Parsable {
-        self
-    }
-    fn finish(&mut self) -> bool {
-        self.0
-    }
-    fn finish_opt(&mut self) -> Option<Self::Output> {
-        unreachable!()
-    }
-    fn is_set(&self) -> bool {
-        self.0
-    }
-    fn set_default(&mut self, f: impl FnOnce() -> Self::Value) {
-        if !self.0 {
-            self.0 = f();
-        }
-    }
-}
-impl Parsable for FlagPlace {
+
     fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
         if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
             return Err(ErrorKind::UnexpectedInlineValue.with_input(value.into()));
@@ -387,45 +376,27 @@ impl Parsable for FlagPlace {
         self.0 = true;
         Ok(())
     }
-}
 
-/// A multi-occurring named argument or a variable length positional argument,
-/// that collects all the values into a `Vec`.
-/// Multiple occurrences can be interleaved by other arguments.
-pub struct VecPlace<T>(Vec<T>);
-impl<T> Default for VecPlace<T> {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
-impl<T> FieldState for VecPlace<T> {
-    type Value = T;
-    type Output = Vec<T>;
-    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
-        <VecParser<P>>::ref_cast_mut(self)
-    }
-    fn finish(&mut self) -> Vec<T> {
-        std::mem::take(&mut self.0)
-    }
-    fn finish_opt(&mut self) -> Option<Vec<T>> {
-        if self.0.is_empty() { None } else { Some(self.finish()) }
-    }
     fn is_set(&self) -> bool {
-        !self.0.is_empty()
+        self.0
     }
     fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
-        if self.0.is_empty() {
+        if !self.is_set() {
             self.0 = f();
         }
     }
 }
 
-#[derive(RefCast)]
-#[repr(transparent)]
-struct VecParser<P: ValueParser>(VecPlace<P::Output>);
-impl<P: ValueParser> Parsable for VecParser<P> {
+/// A multi-occurring named argument or a variable length positional argument,
+/// that collects all the values into a `Vec`.
+/// Multiple occurrences can be interleaved by other arguments.
+pub struct VecPlace<P: ValueParser>(pub Option<Vec<P::Output>>, pub P);
+impl<P: ValueParser> Parsable for VecPlace<P> {
+    type Value = P::Output;
+    type Output = Vec<P::Output>;
+
     fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
-        let v = &mut self.0.0;
+        let v = self.0.get_or_insert_default();
 
         let visit: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.get_delimiter()
         {
@@ -446,47 +417,37 @@ impl<P: ValueParser> Parsable for VecParser<P> {
 
         Ok(())
     }
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
+        if !self.is_set() {
+            self.0 = Some(f());
+        }
+    }
 }
 
 /// A single-occurring single-value named or positional argument.
 ///
 /// Multiple occurrences produce a duplicated argument error.
-pub struct SetValuePlace<T>(Option<T>);
-impl<T> Default for SetValuePlace<T> {
-    fn default() -> Self {
-        Self(None)
-    }
-}
-impl<T> FieldState for SetValuePlace<T> {
-    type Value = T;
-    type Output = T;
-    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
-        <SetValueParser<P>>::ref_cast_mut(self)
-    }
-    fn finish(&mut self) -> T {
-        self.0.take().unwrap()
-    }
-    fn finish_opt(&mut self) -> Option<T> {
-        self.0.take()
+pub struct SetValuePlace<P: ValueParser>(pub Option<P::Output>, pub P);
+impl<P: ValueParser> Parsable for SetValuePlace<P> {
+    type Value = P::Output;
+    type Output = P::Output;
+    fn parse_from(&mut self, _: ArgAttrs, value: &OsStr) -> Result<()> {
+        if self.0.is_some() {
+            return Err(ErrorKind::DuplicatedNamedArgument.into());
+        }
+        self.0 = Some(P::parse(value)?);
+        Ok(())
     }
     fn is_set(&self) -> bool {
         self.0.is_some()
     }
-    fn set_default(&mut self, f: impl FnOnce() -> Self::Value) {
-        self.0.get_or_insert_with(f);
-    }
-}
-
-#[derive(RefCast)]
-#[repr(transparent)]
-struct SetValueParser<P: ValueParser>(SetValuePlace<P::Output>);
-impl<P: ValueParser> Parsable for SetValueParser<P> {
-    fn parse_from(&mut self, _: ArgAttrs, value: &OsStr) -> Result<()> {
-        if self.0.0.is_some() {
-            return Err(ErrorKind::DuplicatedNamedArgument.into());
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
+        if !self.is_set() {
+            self.0 = Some(f());
         }
-        self.0.0 = Some(P::parse(value)?);
-        Ok(())
     }
 }
 
@@ -496,46 +457,26 @@ impl<P: ValueParser> Parsable for SetValueParser<P> {
 /// - Missing argument => `None`
 /// - `--foo` => `Some(None)`
 /// - `--foo=value` => `Some(Some(..))`
-pub struct SetOptionalValuePlace<T>(Option<Option<T>>);
-impl<T> Default for SetOptionalValuePlace<T> {
-    fn default() -> Self {
-        Self(None)
-    }
-}
-impl<T> FieldState for SetOptionalValuePlace<T> {
-    type Value = T;
-    type Output = Option<T>;
-    fn place<P: ValueParser<Output = Self::Value>>(&mut self, _: P) -> &mut dyn Parsable {
-        <SetOptionalValueParser<P>>::ref_cast_mut(self)
-    }
-    fn finish(&mut self) -> Option<T> {
-        unreachable!()
-    }
-    fn finish_opt(&mut self) -> Option<Option<T>> {
-        self.0.take()
-    }
-    fn is_set(&self) -> bool {
-        self.0.is_some()
-    }
-    fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
-        self.0.get_or_insert_with(f);
-    }
-}
-
-#[derive(RefCast)]
-#[repr(transparent)]
-struct SetOptionalValueParser<P: ValueParser>(SetOptionalValuePlace<P::Output>);
-impl<P: ValueParser> Parsable for SetOptionalValueParser<P> {
+pub struct SetOptionalValuePlace<P: ValueParser>(pub Option<Option<P::Output>>, pub P);
+impl<P: ValueParser> Parsable for SetOptionalValuePlace<P> {
+    type Value = P::Output;
+    type Output = Option<P::Output>;
     fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
-        if self.0.0.is_some() {
+        if self.0.is_some() {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
-        self.0.0 = Some(if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
+        self.0 = Some(if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
             Some(P::parse(value)?)
         } else {
             None
         });
         Ok(())
+    }
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
+        self.0 = Some(f());
     }
 }
 
