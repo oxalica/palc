@@ -327,9 +327,7 @@ pub trait Parsable {
     where
         Self: Sized;
 
-    /// `value` is extracted from either inlined or the next argument.
-    /// It is empty for argument that accepts no value.
-    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()>;
+    fn parse_from(&mut self, value: Option<&OsStr>) -> Result<()>;
 
     fn is_set(&self) -> bool
     where
@@ -345,8 +343,8 @@ pub trait Parsable {
     {
         #[inline(never)]
         fn set_from_default_dyn(p: &mut dyn Parsable, default: &OsStr) {
-            // FIXME: Is `ArgAttrs::default()` correct here?
-            p.parse_from(ArgAttrs::default(), default).expect("invalid default value");
+            // Treated as inlined value, so `SetOptionalValuePlace` handles correctly.
+            p.parse_from(Some(default)).expect("invalid default value");
         }
 
         if !self.is_set() {
@@ -366,8 +364,8 @@ impl Parsable for FlagPlace {
     type Value = bool;
     type Output = bool;
 
-    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
-        if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
+    fn parse_from(&mut self, value: Option<&OsStr>) -> Result<()> {
+        if let Some(value) = value {
             return Err(ErrorKind::UnexpectedInlineValue.with_input(value.into()));
         }
         if self.0 {
@@ -395,26 +393,32 @@ impl<P: ValueParser> Parsable for VecPlace<P> {
     type Value = P::Output;
     type Output = Vec<P::Output>;
 
-    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
+    fn parse_from(&mut self, value: Option<&OsStr>) -> Result<()> {
         let v = self.0.get_or_insert_default();
+        v.push(P::parse(value.unwrap_or_default())?);
+        Ok(())
+    }
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+    fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
+        if !self.is_set() {
+            self.0 = Some(f());
+        }
+    }
+}
 
-        let visit: &mut dyn FnMut(&OsStr) -> Result<()> = if let Some(delim) = attrs.get_delimiter()
-        {
-            &mut move |value| {
-                for frag in value.split(char::from(delim.get())) {
-                    v.push(P::parse(frag)?);
-                }
-                Ok(())
-            }
-        } else {
-            &mut |value| {
-                v.push(P::parse(value)?);
-                Ok(())
-            }
-        };
+/// Like `VecPlace` but with `value_delimiter`.
+pub struct VecDelimitedPlace<P: ValueParser>(pub Option<Vec<P::Output>>, pub char, pub P);
+impl<P: ValueParser> Parsable for VecDelimitedPlace<P> {
+    type Value = P::Output;
+    type Output = Vec<P::Output>;
 
-        visit(value)?;
-
+    fn parse_from(&mut self, value: Option<&OsStr>) -> Result<()> {
+        let v = self.0.get_or_insert_default();
+        for frag in value.unwrap_or_default().split(self.1) {
+            v.push(P::parse(frag)?);
+        }
         Ok(())
     }
     fn is_set(&self) -> bool {
@@ -434,11 +438,11 @@ pub struct SetValuePlace<P: ValueParser>(pub Option<P::Output>, pub P);
 impl<P: ValueParser> Parsable for SetValuePlace<P> {
     type Value = P::Output;
     type Output = P::Output;
-    fn parse_from(&mut self, _: ArgAttrs, value: &OsStr) -> Result<()> {
+    fn parse_from(&mut self, value: Option<&OsStr>) -> Result<()> {
         if self.0.is_some() {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
-        self.0 = Some(P::parse(value)?);
+        self.0 = Some(P::parse(value.unwrap_or_default())?);
         Ok(())
     }
     fn is_set(&self) -> bool {
@@ -461,15 +465,11 @@ pub struct SetOptionalValuePlace<P: ValueParser>(pub Option<Option<P::Output>>, 
 impl<P: ValueParser> Parsable for SetOptionalValuePlace<P> {
     type Value = P::Output;
     type Output = Option<P::Output>;
-    fn parse_from(&mut self, attrs: ArgAttrs, value: &OsStr) -> Result<()> {
+    fn parse_from(&mut self, value: Option<&OsStr>) -> Result<()> {
         if self.0.is_some() {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
-        self.0 = Some(if attrs.contains(ArgAttrs::HAS_INLINE_VALUE) {
-            Some(P::parse(value)?)
-        } else {
-            None
-        });
+        self.0 = Some(if let Some(value) = value { Some(P::parse(value)?) } else { None });
         Ok(())
     }
     fn is_set(&self) -> bool {
@@ -607,10 +607,10 @@ fn visit_positional(
     }
 
     let place = &mut *frame.fields[usize::from(attrs.get_index())];
-    place.parse_from(attrs, &arg)?;
+    place.parse_from(Some(&arg))?;
     if attrs.contains(ArgAttrs::GREEDY) {
         for arg in &mut *p.iter {
-            place.parse_from(attrs, &arg)?;
+            place.parse_from(Some(&arg))?;
         }
         // Everything is consumed here. The outer loop should exit as well.
     }
@@ -624,7 +624,7 @@ fn visit_named(
     enc_name: &OsStr,
     inline_value: RawInlineValue<'_>,
 ) -> Result<ControlFlow<()>> {
-    let Some((place, info, mut attrs)) = frame.search_named(enc_name, false) else {
+    let Some((place, info, attrs)) = frame.search_named(enc_name, false) else {
         // TODO: Configurable help?
         #[cfg(feature = "help")]
         if enc_name == "h" || enc_name == "--help" {
@@ -642,16 +642,13 @@ fn visit_named(
     let require_value = attrs.contains(ArgAttrs::REQUIRE_VALUE);
     let require_eq = attrs.contains(ArgAttrs::REQUIRE_EQ);
     let ret = match inline_value {
-        RawInlineValue::Eq(v) => {
-            attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
-            Ok(Cow::Borrowed(v))
-        }
+        RawInlineValue::Eq(v) => Ok(Some(Cow::Borrowed(v))),
         RawInlineValue::None => {
             // NB: On `Option<Option<_>>` case (`!require_value && require_eq`),
             // we should accept standalone long arguments `--foo` as missing value.
             // Thus `require_value` checks first.
             if !require_value {
-                Ok(Cow::Borrowed("".as_ref()))
+                Ok(None)
             } else if require_eq {
                 Err(ErrorKind::MissingEq.into())
             } else {
@@ -668,7 +665,7 @@ fn visit_named(
                         false
                     }
                 }) {
-                    Some(value) => Ok(Cow::Owned(value)),
+                    Some(value) => Ok(Some(Cow::Owned(value))),
                     None => Err(ErrorKind::MissingValue.into()),
                 }
             }
@@ -680,18 +677,19 @@ fn visit_named(
             if require_eq {
                 Err(ErrorKind::MissingEq.into())
             } else if require_value {
-                attrs.set(ArgAttrs::HAS_INLINE_VALUE, true);
-                Ok(Cow::Borrowed(tail))
+                Ok(Some(Cow::Borrowed(tail)))
             } else {
-                Ok(Cow::Borrowed("".as_ref()))
+                Ok(None)
             }
         }
     }
     .and_then(|mut value| {
-        if attrs.contains(ArgAttrs::MAKE_LOWERCASE) {
+        if let Some(value) = &mut value
+            && attrs.contains(ArgAttrs::MAKE_LOWERCASE)
+        {
             value.to_mut().make_ascii_lowercase();
         }
-        place.parse_from(attrs, &value)
+        place.parse_from(value.as_deref())
     });
 
     match ret {

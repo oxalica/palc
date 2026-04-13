@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::num::NonZero;
 
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote, quote_spanned};
@@ -123,6 +122,9 @@ struct FieldInfo<'i> {
     /// The type used for parser inference, with `Option`/`Vec` stripped.
     value_ty: &'i syn::Type,
 
+    // State argumentations.
+    value_delimiter: Option<LitChar>,
+
     // Arg configurable //
     /// Encoded names for matching. Empty for positional arguments.
     enc_names: Vec<String>,
@@ -144,6 +146,50 @@ struct FieldInfo<'i> {
     description: String,
     doc: Doc,
     hide: bool,
+}
+
+impl FieldInfo<'_> {
+    fn initializer(&self) -> TokenStream {
+        let value_ty = self.value_ty;
+        // See also `palc::values::InferValueParser`.
+        let value_parser = quote_spanned! {value_ty.span()=>
+            __rt::assert_auto_infer_value_parser_ok(
+                (&&&__rt::PhantomData::<#value_ty>).__palc_infer_value_parser()
+            )
+        };
+        match self.kind {
+            MagicKind::Bool => quote! { __rt::FlagPlace(false) },
+            MagicKind::Value | MagicKind::Option => {
+                quote! { __rt::SetValuePlace(__rt::None, #value_parser) }
+            }
+            MagicKind::OptionOption => {
+                quote! { __rt::SetOptionalValuePlace(__rt::None, #value_parser) }
+            }
+            MagicKind::Vec | MagicKind::OptionVec => match &self.value_delimiter {
+                Some(delim) => {
+                    quote! { __rt::VecDelimitedPlace(__rt::None, #delim, #value_parser) }
+                }
+                None => quote! { __rt::VecPlace(__rt::None, #value_parser) },
+            },
+        }
+    }
+
+    fn extractor(&self) -> TokenStream {
+        match self.kind {
+            MagicKind::Bool
+            | MagicKind::OptionVec
+            | MagicKind::Option
+            | MagicKind::OptionOption => {
+                quote! { .0 }
+            }
+            MagicKind::Value => {
+                quote! { .0 .unwrap() }
+            }
+            MagicKind::Vec => {
+                quote! { .0 .unwrap_or_default() }
+            }
+        }
+    }
 }
 
 enum DefaultValue {
@@ -194,44 +240,6 @@ impl MagicKind {
         match self {
             Self::Vec | Self::OptionVec => true,
             Self::Bool | Self::Value | Self::Option | Self::OptionOption => false,
-        }
-    }
-
-    fn initializer(self, value_ty: &syn::Type) -> TokenStream {
-        // See also `palc::values::InferValueParser`.
-        let value_parser = quote_spanned! {value_ty.span()=>
-            __rt::assert_auto_infer_value_parser_ok(
-                (&&&__rt::PhantomData::<#value_ty>).__palc_infer_value_parser()
-            )
-        };
-        match self {
-            MagicKind::Bool => quote! { __rt::FlagPlace(false) },
-            MagicKind::Value | MagicKind::Option => {
-                quote! { __rt::SetValuePlace(__rt::None, #value_parser) }
-            }
-            MagicKind::OptionOption => {
-                quote! { __rt::SetOptionalValuePlace(__rt::None, #value_parser) }
-            }
-            MagicKind::Vec | MagicKind::OptionVec => {
-                quote! { __rt::VecPlace(__rt::None, #value_parser) }
-            }
-        }
-    }
-
-    fn extractor(self) -> TokenStream {
-        match self {
-            MagicKind::Bool
-            | MagicKind::OptionVec
-            | MagicKind::Option
-            | MagicKind::OptionOption => {
-                quote! { .0 }
-            }
-            MagicKind::Value => {
-                quote! { .0 .unwrap() }
-            }
-            MagicKind::Vec => {
-                quote! { .0 .unwrap_or_default() }
-            }
         }
     }
 }
@@ -356,32 +364,12 @@ pub fn expand_args_parse<'i>(
             false
         };
 
-        let value_delimiter = if let Some(lit_ch) = &arg.value_delimiter {
-            let ch = lit_ch.value();
-            if !kind.accepts_multiple_values() {
-                emit_error!(lit_ch, "arg(value_delimiter) can only be used on Vec-like types");
-                None
-            } else if !ch.is_ascii() || ch.is_ascii_control() {
-                emit_error!(
-                    lit_ch,
-                    r#"arg(value_delimiter) must be non-control ASCII characters. \
-                    A unicode codepoint is not necessarity a "character" in human sense, thus \
-                    automatic splitting may give unexpected results. \
-                    If you do want this to be supported, convince us by opening an issue."#,
-                );
-                None
-            } else if !arg.is_named() {
-                emit_error!(
-                    lit_ch,
-                    "TODO: arg(value_delimiter) is not yet supported on positional arguments",
-                );
-                None
-            } else {
-                Some(NonZero::new(ch as u8).expect("not NUL"))
-            }
-        } else {
-            None
-        };
+        if let Some(lit) = &arg.value_delimiter
+            && !kind.accepts_multiple_values()
+        {
+            emit_error!(lit, "arg(value_delimiter) can only be used on Vec-like types");
+            arg.value_delimiter = None;
+        }
 
         let accept_hyphen = match (arg.allow_hyphen_values, arg.allow_negative_numbers) {
             (true, false) => ArgAttrs::ACCEPT_HYPHEN_ANY,
@@ -421,7 +409,7 @@ pub fn expand_args_parse<'i>(
             );
         }
 
-        let mut attrs = ArgAttrs::delimiter(value_delimiter).union(accept_hyphen);
+        let mut attrs = ArgAttrs::default().union(accept_hyphen);
         attrs.set(ArgAttrs::REQUIRE_VALUE, kind.require_value());
         attrs.set(ArgAttrs::REQUIRE_EQ, arg.require_equals);
         attrs.set(ArgAttrs::GLOBAL, arg.global);
@@ -495,6 +483,7 @@ pub fn expand_args_parse<'i>(
                 kind,
                 value_ty,
                 enc_names,
+                value_delimiter: arg.value_delimiter,
                 attrs,
                 required,
                 default_value,
@@ -546,6 +535,7 @@ pub fn expand_args_parse<'i>(
                 kind,
                 value_ty,
                 enc_names: Vec::new(),
+                value_delimiter: arg.value_delimiter,
                 attrs,
                 required,
                 default_value,
@@ -652,9 +642,7 @@ impl ToTokens for ArgsParse<'_> {
         let (state_idents, state_initializers, state_extractors) = self
             .direct_fields
             .iter()
-            .map(|FieldInfo { ident, value_ty, kind, .. }| {
-                (*ident, kind.initializer(value_ty), kind.extractor())
-            })
+            .map(|f| (f.ident, f.initializer(), f.extractor()))
             .chain(self.flatten_fields.iter().map(|FlattenFieldInfo { ident, ty }| {
                 (*ident, quote! { __rt::None::<#ty> }, quote! { .unwrap() })
             }))

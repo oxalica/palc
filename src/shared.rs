@@ -1,5 +1,4 @@
 //! NB. This file is shared between library and proc-macro crates.
-use std::num::NonZero;
 
 /// Bit-packed attribute of an logical argument.
 /// Used to carry additional information into the runtime.
@@ -20,23 +19,6 @@ impl ArgAttrs {
     #[must_use]
     pub fn get_index(self) -> u8 {
         self.0 as u8
-    }
-
-    /// New from an ASCII value delimiter.
-    ///
-    /// It is at bit 8:15.
-    pub const fn delimiter(ch: Option<NonZero<u8>>) -> Self {
-        let ch = match ch {
-            Some(ch) => ch.get(),
-            None => 0,
-        };
-        assert!(ch.is_ascii());
-        Self((ch as u32) << 8)
-    }
-
-    #[must_use]
-    pub fn get_delimiter(self) -> Option<NonZero<u8>> {
-        NonZero::new((self.0 >> 8) as u8)
     }
 
     /// Does this argument require a value? This means it will consume the next
@@ -63,9 +45,6 @@ impl ArgAttrs {
     pub const GREEDY: Self = Self(1 << 23);
     /// Is this the positional argument that is only accessible through `--`?
     pub const LAST: Self = Self(1 << 24);
-    /// Is an inlined value provided?
-    /// This flag is only set by the parser runtime to inform the place implementation.
-    pub const HAS_INLINE_VALUE: Self = Self(1 << 25);
 
     pub fn set(&mut self, other: Self, value: bool) {
         if value {
