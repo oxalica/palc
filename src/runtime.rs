@@ -35,40 +35,21 @@ pub extern "C" fn error_missing_subcmd() -> Result<()> {
     Err(ErrorKind::MissingRequiredSubcommand.into())
 }
 
-/// Other relatively uncommon opt-in constraints: `exclusive`, `dependency`, `conflict`.
-// FIXME: Too many arguments. Maybe flatten into a single template?
 #[cold]
-pub extern "C" fn validate_constraints(
-    info: &RawArgsInfo,
-    isset: &[bool],
-    exclusive: &[u8],
-    dependency_groups: &[&[u8]],
-    conflict_groups: &[&[u8]],
-) -> Result<()> {
-    if let Some(&i) = exclusive.iter().find(|&&i| isset[usize::from(i)])
-        && isset.iter().filter(|&&set| set).count() > 1
-    {
-        return Err(ErrorKind::ConstraintExclusive.with_arg_idx(info, i));
-    }
-    for &group in dependency_groups {
-        if let Some((&lhs, others)) = group.split_first()
-            && isset[usize::from(lhs)]
-            && let Some(&_rhs) = others.iter().find(|&&rhs| !isset[usize::from(rhs)])
-        {
-            // TODO: Another argument?
-            return Err(ErrorKind::ConstraintRequired.with_arg_idx(info, lhs));
-        }
-    }
-    for &group in conflict_groups {
-        if let Some((&lhs, others)) = group.split_first()
-            && isset[usize::from(lhs)]
-            && let Some(&_rhs) = others.iter().find(|&&rhs| isset[usize::from(rhs)])
-        {
-            // TODO: Another argument?
-            return Err(ErrorKind::ConstraintConflict.with_arg_idx(info, lhs));
-        }
-    }
-    Ok(())
+pub extern "C" fn error_exclusive(info: &RawArgsInfo, idx: u8) -> Result<()> {
+    Err(ErrorKind::ConstraintExclusive.with_arg_idx(info, idx))
+}
+
+#[cold]
+pub extern "C" fn error_dependency(info: &RawArgsInfo, _idx1: u8, idx2: u8) -> Result<()> {
+    // TODO: Another index?
+    Err(ErrorKind::ConstraintRequired.with_arg_idx(info, idx2))
+}
+
+#[cold]
+pub extern "C" fn error_conflict(info: &RawArgsInfo, idx1: u8, _idx2: u8) -> Result<()> {
+    // TODO: Another index?
+    Err(ErrorKind::ConstraintConflict.with_arg_idx(info, idx1))
 }
 
 //////// Major traits and types ////////
@@ -359,7 +340,7 @@ pub trait Parsable {
 /// A value-less named argument, so-called flag.
 ///
 /// `--flag` set the state to `true`. Multiple occurrences are rejected.
-pub struct FlagPlace(pub bool);
+pub struct FlagPlace(pub Option<bool>);
 
 impl Parsable for FlagPlace {
     type Value = bool;
@@ -369,19 +350,19 @@ impl Parsable for FlagPlace {
         if let Some(value) = value {
             return Err(ErrorKind::UnexpectedInlineValue.with_input(value.into()));
         }
-        if self.0 {
+        if self.0.is_some() {
             return Err(ErrorKind::DuplicatedNamedArgument.into());
         }
-        self.0 = true;
+        self.0 = Some(true);
         Ok(())
     }
 
     fn is_set(&self) -> bool {
-        self.0
+        self.0.is_some()
     }
     fn set_default(&mut self, f: impl FnOnce() -> Self::Output) {
         if !self.is_set() {
-            self.0 = f();
+            self.0 = Some(f());
         }
     }
 }

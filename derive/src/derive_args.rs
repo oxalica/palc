@@ -158,7 +158,7 @@ impl FieldInfo<'_> {
             )
         };
         match self.kind {
-            MagicKind::Bool => quote! { __rt::FlagPlace(false) },
+            MagicKind::Bool => quote! { __rt::FlagPlace(__rt::None) },
             MagicKind::Value | MagicKind::Option => {
                 quote! { __rt::SetValuePlace(__rt::None, #value_parser) }
             }
@@ -176,16 +176,13 @@ impl FieldInfo<'_> {
 
     fn extractor(&self) -> TokenStream {
         match self.kind {
-            MagicKind::Bool
-            | MagicKind::OptionVec
-            | MagicKind::Option
-            | MagicKind::OptionOption => {
+            MagicKind::OptionVec | MagicKind::Option | MagicKind::OptionOption => {
                 quote! { .0 }
             }
             MagicKind::Value => {
                 quote! { .0 .unwrap() }
             }
-            MagicKind::Vec => {
+            MagicKind::Bool | MagicKind::Vec => {
                 quote! { .0 .unwrap_or_default() }
             }
         }
@@ -600,21 +597,27 @@ pub fn expand_args_parse<'i>(
         .iter()
         .map(|f| (f.ident.to_string(), f.attrs.get_index()))
         .collect::<HashMap<String, u8>>();
-    let resolve_field_refs = |idents: &[FieldIdent]| {
+    let resolve_field_refs = |idents: &[FieldIdent]| -> Option<Vec<u8>> {
+        if idents.is_empty() {
+            return None;
+        }
+        // NB: Generator expects resolved list has the same length with the original one.
+        // Here we return `None` as soon as any error is encountered.
         idents
             .iter()
-            .filter_map(|ident| match ident_idx_map.get(&ident.0.to_string()) {
-                Some(&idx) => Some(idx),
+            .map(|ident| match ident_idx_map.get(&ident.0.to_string()) {
+                Some(&idx) => Ok(idx),
                 _ => {
                     emit_error!(ident.0, "field not found");
-                    None
+                    Err(())
                 }
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
     };
     for f in &mut direct_fields {
-        f.dependencies_idx = Some(resolve_field_refs(&f.dependencies));
-        f.conflicts_idx = Some(resolve_field_refs(&f.conflicts));
+        f.dependencies_idx = resolve_field_refs(&f.dependencies);
+        f.conflicts_idx = resolve_field_refs(&f.conflicts);
     }
 
     if !flatten_fields.is_empty()
@@ -740,87 +743,93 @@ impl ToTokens for ValidateFinish<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let def = self.0;
 
-        // TODO: Can we compress this list?
-        let isset_elems = def
-            .direct_fields
-            .iter()
-            .map(|FieldInfo { ident, .. }| {
-                quote! { __rt::Parsable::is_set(&#ident) }
-            })
-            // Include the subcommand for exclusiveness check.
-            .chain(def.subcommand.as_ref().map(|SubcommandInfo { ident, .. }| {
-                quote! { #ident.is_some() }
-            }));
-        let mut exclusive_idxs = def
-            .direct_fields
-            .iter()
-            .filter_map(|f| f.exclusive.then_some(f.attrs.get_index()))
-            .peekable();
-        let mut dependency_groups = def
-            .direct_fields
-            .iter()
-            .filter_map(|f| {
-                let cur_idx = f.attrs.get_index();
-                let idxs = f.dependencies_idx.as_ref().unwrap();
-                (!idxs.is_empty()).then(|| quote! { &[#cur_idx, #(#idxs),*] })
-            })
-            .peekable();
-        let mut conflict_groups = def
-            .direct_fields
-            .iter()
-            .filter_map(|f| {
-                let cur_idx = f.attrs.get_index();
-                let idxs = f.conflicts_idx.as_ref().unwrap();
-                (!idxs.is_empty()).then(|| quote! { &[#cur_idx, #(#idxs),*] })
-            })
-            .peekable();
-        if exclusive_idxs.peek().is_some()
-            || dependency_groups.peek().is_some()
-            || conflict_groups.peek().is_some()
-        {
+        if def.direct_fields.iter().any(|f| f.exclusive) {
+            // Exclusive arguments conflict with all direct arguments and the subcommand (if any).
+            let direct_idents = def.direct_fields.iter().map(|f| f.ident);
+            let subcmd_is_set = def
+                .subcommand
+                .as_ref()
+                .map(|SubcommandInfo { ident, .. }| quote! { + #ident.is_some() as u8 });
             tokens.extend(quote! {
-                __rt::validate_constraints(
-                    __info,
-                    &[#(#isset_elems),*],
-                    &[#(#exclusive_idxs),*],
-                    &[#(#dependency_groups),*],
-                    &[#(#conflict_groups),*],
-                )?;
+                let __total_args = #((#direct_idents.0.is_some() as u8))+* #subcmd_is_set;
             });
         }
 
-        // Set default values.
-        // We already reject default values with `required = true`, it should
-        // not matter if we set defaults or check missing ones first.
-        for FieldInfo { ident, default_value, .. } in &def.direct_fields {
-            let Some(default_value) = default_value else { continue };
-            tokens.extend(match default_value {
-                DefaultValue::ValueExpr(e) => quote! {
-                    __rt::Parsable::set_default(&mut #ident, || #e);
-                },
-                DefaultValue::ParseStr(s) => quote! {
-                    __rt::Parsable::set_default_parse(&mut #ident, #s);
-                },
-            });
-        }
+        // On-set checks.
+        for f @ FieldInfo { ident, attrs, .. } in &def.direct_fields {
+            let mut checks = TokenStream::new();
+            let idx = attrs.get_index();
 
-        // Check required fields inline to hint the optimizer the `unwrap` below
-        // will not fail.
-        // This is necessary to eliminate the mass dropping codegen
-        // which almost doubles or triples the function size.
-        for f in &def.direct_fields {
-            let ident = f.ident;
-            let idx = f.attrs.get_index();
-            // NB: For `MagicKind::Value` with default values, `required` is false, but
-            // we must still assert it is set. Otherwise the optimizer cannot
-            // know it must be `Some`, because it may not look into `set_default*` calls.
-            if f.required || f.kind == MagicKind::Value {
-                tokens.extend(quote! {
-                    if !__rt::Parsable::is_set(&#ident) {
-                        return __rt::error_missing_arg(__info, #idx);
+            if f.exclusive {
+                checks.extend(quote! {
+                    if __total_args > 1 {
+                        return __rt::error_exclusive(__info, #idx);
                     }
                 });
             }
+
+            if let Some(dep_idxs) = &f.dependencies_idx {
+                let dep_idents = &f.dependencies;
+                checks.extend(quote! {
+                    '__dependency: {
+                        return __rt::error_dependency(
+                            __info,
+                            #idx,
+                            #(if #dep_idents.0.is_none() { #dep_idxs } else)*
+                                { break '__dependency },
+                        )
+                    }
+                });
+            }
+
+            if let Some(conf_idxs) = &f.conflicts_idx {
+                let conf_idents = &f.conflicts;
+                checks.extend(quote! {
+                    '__conflict: {
+                        return __rt::error_conflict(
+                            __info,
+                            #idx,
+                            #(if #conf_idents.0.is_some() { #conf_idxs } else)*
+                                { break '__conflict },
+                        );
+                    }
+                });
+            }
+
+            if !checks.is_empty() {
+                tokens.extend(quote! {
+                    if let __rt::Some(_) = #ident.0 {
+                        #checks
+                    }
+                });
+            }
+        }
+
+        // On-not-set checks.
+        // This is done after on-set checks. In case of `conflicts_with` together with `default_value`,
+        // no error should be reported as long as the user does not set it.
+        for f @ FieldInfo { ident, .. } in &def.direct_fields {
+            let idx = f.attrs.get_index();
+            let checks = if let Some(default_value) = &f.default_value {
+                match default_value {
+                    DefaultValue::ValueExpr(e) => quote! {
+                        __rt::Parsable::set_default(&mut #ident, || #e);
+                    },
+                    DefaultValue::ParseStr(s) => quote! {
+                        __rt::Parsable::set_default_parse(&mut #ident, #s);
+                    },
+                }
+            } else if f.required {
+                quote! { return __rt::error_missing_arg(__info, #idx); }
+            } else {
+                continue;
+            };
+
+            tokens.extend(quote! {
+                if let __rt::None = #ident.0 {
+                    #checks
+                }
+            });
         }
 
         // Missing subcommand produces a special error message.
@@ -828,7 +837,7 @@ impl ToTokens for ValidateFinish<'_> {
         if let Some(SubcommandInfo { ident, .. }) = def.subcommand.as_ref().filter(|s| !s.optional)
         {
             tokens.extend(quote! {
-                if #ident.is_none() {
+                if let __rt::None = #ident {
                     return __rt::error_missing_subcmd();
                 }
             });
@@ -836,9 +845,14 @@ impl ToTokens for ValidateFinish<'_> {
 
         // 1. Suppress bulk-drop on `__out` which is unnecessary.
         // 2. Assert all flattened arguments are already initialized.
-        let flatten_vars = self.0.flatten_fields.iter().map(|f| f.ident);
+        let flatten_idents = def.flatten_fields.iter().map(|f| f.ident);
+        let set_via_default_idents = def
+            .direct_fields
+            .iter()
+            .filter(|f| f.kind == MagicKind::Value && !f.required)
+            .map(|f| f.ident);
         tokens.extend(quote! {
-            if __out.is_some() #(|| #flatten_vars.is_none())* {
+            if __out.is_some() #(|| #flatten_idents.is_none())* #(|| #set_via_default_idents.0.is_none())* {
                 __rt::unreachable_nounwind();
             }
         });

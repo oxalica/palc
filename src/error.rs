@@ -120,7 +120,10 @@ impl fmt::Display for Error {
                 // TODO: Possible subcommands.
             }
             ErrorKind::ConstraintRequired => {
-                format_args!("the argument '{arg_desc}' is required but not provided")
+                // TODO: What requires it?
+                format_args!(
+                    "the argument '{arg_desc}' is required because some dependency arguments are provided"
+                )
             }
             ErrorKind::ConstraintExclusive => {
                 format_args!(

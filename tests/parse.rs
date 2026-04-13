@@ -571,7 +571,7 @@ fn value_delimiter() {
 }
 
 #[test]
-fn constraint() {
+fn constraint_required() {
     #[derive(Debug, Default, PartialEq, Parser)]
     struct Required {
         #[arg(long, required = true)]
@@ -609,6 +609,143 @@ fn constraint() {
             level: Some(2),
         },
     )
+}
+
+#[test]
+fn constraint_exclusive() {
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(long, exclusive = true)]
+        start: Option<String>,
+        #[arg(long, exclusive = true)]
+        stop: bool,
+        #[arg(long)]
+        key: Option<String>,
+        #[command(subcommand)]
+        cmd: Option<Cmd>,
+    }
+
+    #[derive(Debug, PartialEq, Subcommand)]
+    enum Cmd {
+        Foo,
+    }
+
+    check_err::<Cli>(
+        ["", "--start=foo", "--key=value"],
+        expect![
+            "the argument '--start <START>' cannot be used with one or more of the other specified arguments"
+        ],
+    );
+    check_err::<Cli>(
+        ["", "--start=foo", "--stop", "--key=value"],
+        expect![
+            "the argument '--start <START>' cannot be used with one or more of the other specified arguments"
+        ],
+    );
+    check_err::<Cli>(
+        ["", "--stop", "--key=value"],
+        expect![
+            "the argument '--stop' cannot be used with one or more of the other specified arguments"
+        ],
+    );
+    check_err::<Cli>(
+        ["", "--stop", "foo"],
+        expect![
+            "the argument '--stop' cannot be used with one or more of the other specified arguments"
+        ],
+    );
+
+    check([""], &Cli::default());
+    check(
+        ["", "--key=value", "foo"],
+        &Cli { start: None, stop: false, key: Some("value".into()), cmd: Some(Cmd::Foo) },
+    );
+    check(
+        ["", "--start=foo"],
+        &Cli { start: Some("foo".into()), stop: false, key: None, cmd: None },
+    );
+    check(["", "--stop"], &Cli { start: None, stop: true, key: None, cmd: None });
+}
+
+#[test]
+fn constraint_require() {
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long, requires = "from")]
+        to: Option<String>,
+        #[arg(long, requires = "from", requires = "to")]
+        direct: bool,
+    }
+
+    check_err::<Cli>(
+        ["", "--direct"],
+        expect![
+            "the argument '--from <FROM>' is required because some dependency arguments are provided"
+        ],
+    );
+    check_err::<Cli>(
+        ["", "--to=out"],
+        expect![
+            "the argument '--from <FROM>' is required because some dependency arguments are provided"
+        ],
+    );
+    check_err::<Cli>(
+        ["", "--direct", "--from=in"],
+        expect![
+            "the argument '--to <TO>' is required because some dependency arguments are provided"
+        ],
+    );
+
+    check([""], &Cli::default());
+    check(["", "--from=in"], &Cli { from: Some("in".into()), to: None, direct: false });
+    check(
+        ["", "--from=in", "--to=out"],
+        &Cli { from: Some("in".into()), to: Some("out".into()), direct: false },
+    );
+    check(
+        ["", "--to=out", "--direct", "--from=in"],
+        &Cli { from: Some("in".into()), to: Some("out".into()), direct: true },
+    );
+}
+#[test]
+fn constraint_conflict() {
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, conflicts_with = "config")]
+        config_file: Option<String>,
+        #[arg(long, conflicts_with_all =["config", "config_file"])]
+        no_config: bool,
+    }
+
+    check_err::<Cli>(
+        ["", "--config=foo", "--config-file=path"],
+        expect![
+            "the argument '--config-file <CONFIG_FILE>' cannot be used with some other arguments"
+        ],
+    );
+    check_err::<Cli>(
+        ["", "--no-config", "--config=foo"],
+        expect!["the argument '--no-config' cannot be used with some other arguments"],
+    );
+    check_err::<Cli>(
+        ["", "--config-file=path", "--no-config"],
+        expect!["the argument '--no-config' cannot be used with some other arguments"],
+    );
+
+    check([""], &Cli::default());
+    check(
+        ["", "--config=foo"],
+        &Cli { config: Some("foo".into()), config_file: None, no_config: false },
+    );
+    check(
+        ["", "--config-file=path"],
+        &Cli { config: None, config_file: Some("path".into()), no_config: false },
+    );
+    check(["", "--no-config"], &Cli { config: None, config_file: None, no_config: true });
 }
 
 #[test]
