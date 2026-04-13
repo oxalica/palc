@@ -1,6 +1,6 @@
 # Runs on AMD Ryzen 7 5700G, x86_64-linux. Your result may vary.
-# Commit: 329c8c30f6a173d857a4008ac49eb239f7de2c00
-# Rust: rustc 1.93.1
+# Commit: 62dbe325dacca10861e69881dd8cc4d45a18193e
+# Rust: rustc 1.94.0
 # clap: 4.6.0
 # argh: 0.1.19
 
@@ -11,13 +11,12 @@
 #     because palc does not support them yet.
 
 name                      minimal      default   full-build  incremental
-simple-clap                293KiB       424KiB     0:02.83      0:00.03
-simple-argh               24.6KiB      25.8KiB     0:03.20      0:00.03
-simple-palc               25.5KiB      32.0KiB     0:02.39      0:00.03
+simple-clap                299KiB       430KiB     0:03.03      0:00.03
+simple-argh               24.5KiB      26.8KiB     0:03.28      0:00.03
+simple-palc               26.1KiB      31.2KiB     0:02.34      0:00.03
 simple-none               8.61KiB      8.61KiB     0:00.13      0:00.03
-criterion-clap             406KiB       539KiB     0:03.02      0:00.03
-criterion-argh            38.4KiB      43.0KiB     0:03.18      0:00.03
-criterion-palc            45.2KiB      55.7KiB     0:02.45      0:00.03
-deno-clap                  482KiB       609KiB     0:03.11      0:00.03
-deno-palc                 81.1KiB       109KiB     0:02.62      0:00.03
-
+criterion-clap             408KiB       541KiB     0:03.03      0:00.03
+criterion-argh            38.2KiB      42.8KiB     0:03.32      0:00.03
+criterion-palc            48.7KiB      56.3KiB     0:02.42      0:00.03
+deno-clap                  485KiB       614KiB     0:03.13      0:00.03
+deno-palc                 75.3KiB       101KiB     0:02.63      0:00.03
