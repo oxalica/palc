@@ -337,12 +337,13 @@ pub trait Parsable {
     where
         Self: Sized;
 
-    fn set_default_parse(&mut self, default: &str)
+    #[inline]
+    extern "C" fn set_default_parse(&mut self, default: &str)
     where
         Self: Sized,
     {
         #[inline(never)]
-        fn set_from_default_dyn(p: &mut dyn Parsable, default: &OsStr) {
+        extern "C" fn set_from_default_dyn(p: &mut dyn Parsable, default: &OsStr) {
             // Treated as inlined value, so `SetOptionalValuePlace` handles correctly.
             p.parse_from(Some(default)).expect("invalid default value");
         }

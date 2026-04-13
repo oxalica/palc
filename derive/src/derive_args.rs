@@ -789,6 +789,21 @@ impl ToTokens for ValidateFinish<'_> {
             });
         }
 
+        // Set default values.
+        // We already reject default values with `required = true`, it should
+        // not matter if we set defaults or check missing ones first.
+        for FieldInfo { ident, default_value, .. } in &def.direct_fields {
+            let Some(default_value) = default_value else { continue };
+            tokens.extend(match default_value {
+                DefaultValue::ValueExpr(e) => quote! {
+                    __rt::Parsable::set_default(&mut #ident, || #e);
+                },
+                DefaultValue::ParseStr(s) => quote! {
+                    __rt::Parsable::set_default_parse(&mut #ident, #s);
+                },
+            });
+        }
+
         // Check required fields inline to hint the optimizer the `unwrap` below
         // will not fail.
         // This is necessary to eliminate the mass dropping codegen
@@ -796,7 +811,10 @@ impl ToTokens for ValidateFinish<'_> {
         for f in &def.direct_fields {
             let ident = f.ident;
             let idx = f.attrs.get_index();
-            if f.required {
+            // NB: For `MagicKind::Value` with default values, `required` is false, but
+            // we must still assert it is set. Otherwise the optimizer cannot
+            // know it must be `Some`, because it may not look into `set_default*` calls.
+            if f.required || f.kind == MagicKind::Value {
                 tokens.extend(quote! {
                     if !__rt::Parsable::is_set(&#ident) {
                         return __rt::error_missing_arg(__info, #idx);
@@ -813,19 +831,6 @@ impl ToTokens for ValidateFinish<'_> {
                 if #ident.is_none() {
                     return __rt::error_missing_subcmd();
                 }
-            });
-        }
-
-        // Set default values after checks.
-        for FieldInfo { ident, default_value, .. } in &def.direct_fields {
-            let Some(default_value) = default_value else { continue };
-            tokens.extend(match default_value {
-                DefaultValue::ValueExpr(e) => quote! {
-                    __rt::Parsable::set_default(&mut #ident, || #e);
-                },
-                DefaultValue::ParseStr(s) => quote! {
-                    __rt::Parsable::set_default_parse(&mut #ident, #s);
-                },
             });
         }
 
