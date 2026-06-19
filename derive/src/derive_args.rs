@@ -891,6 +891,12 @@ impl ToTokens for RawArgsInfo<'_> {
 
         let has_optional_named = named_fields.iter().any(|f| !f.required && !f.hide);
 
+        let version = match self.0.cmd_meta.and_then(|m| m.version.as_ref()) {
+            Some(Override::Explicit(expr)) => quote! { __rt::Some(#expr) },
+            Some(Override::Inherit) => quote! { __rt::Some(env!("CARGO_PKG_VERSION")) },
+            None => quote! { __rt::None },
+        };
+
         let flatten_tys = self.0.flatten_tys();
 
         tokens.extend(quote! {
@@ -903,6 +909,7 @@ impl ToTokens for RawArgsInfo<'_> {
                 #subcmd_opt,
                 #has_optional_named,
                 #help_display,
+                __rt::__gate_version!(__rt::None, #version),
                 &[#(<#flatten_tys as __rt::Args>::__INFO),*],
             )
         });

@@ -18,6 +18,24 @@ macro_rules! __gate_help {
     };
 }
 
+#[cfg(feature = "version")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __gate_version {
+    ($disabled:expr, $($enabled:tt)*) => {
+        $($enabled)*
+    };
+}
+
+#[cfg(not(feature = "version"))]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __gate_version {
+    ($disabled:expr, $($enabled:tt)*) => {
+        $disabled
+    };
+}
+
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __const_concat {

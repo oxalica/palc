@@ -83,11 +83,11 @@ impl<A: Args> ParserFlavor<A> for StructParserFlavor<A> {
     fn run_parser(p: &mut RawParser, program_name: &OsStr) -> Result<A> {
         let mut out = None;
         let mut frame = CommandFrame {
-            #[cfg(feature = "help")]
+            #[cfg(any(feature = "help", feature = "version"))]
             name: &program_name.to_string_lossy(),
             parent: &mut (),
         };
-        #[cfg(not(feature = "help"))]
+        #[cfg(not(any(feature = "help", feature = "version")))]
         {
             let _ = program_name;
         }
@@ -218,6 +218,16 @@ pub trait Frame {
 
     #[cfg(feature = "help")]
     fn collect_command_prefix(&self, out: &mut String);
+
+    #[cfg(feature = "version")]
+    fn program_name(&self) -> Option<&str> {
+        None
+    }
+
+    #[cfg(feature = "version")]
+    fn version(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 // NB: proc-macro constructs this.
@@ -252,6 +262,16 @@ impl Frame for ArgsFrame<'_, '_> {
     fn collect_command_prefix(&self, out: &mut String) {
         self.parent.collect_command_prefix(out);
     }
+
+    #[cfg(feature = "version")]
+    fn program_name(&self) -> Option<&str> {
+        self.parent.program_name()
+    }
+
+    #[cfg(feature = "version")]
+    fn version(&self) -> Option<&'static str> {
+        self.info.version.or_else(|| self.parent.version())
+    }
 }
 
 /// An auxiliary frame recording encountered (sub)command names for "Usage".
@@ -263,7 +283,7 @@ impl Frame for ArgsFrame<'_, '_> {
 // TODO: Can we elide this frame if help is disabled? Currently this also serves
 // as a global argument boundary.
 struct CommandFrame<'a> {
-    #[cfg(feature = "help")]
+    #[cfg(any(feature = "help", feature = "version"))]
     name: &'a str,
     parent: &'a mut dyn Frame,
 }
@@ -281,6 +301,19 @@ impl Frame for CommandFrame<'_> {
         self.parent.collect_command_prefix(out);
         out.push(' ');
         out.push_str(self.name);
+    }
+
+    #[cfg(feature = "version")]
+    fn program_name(&self) -> Option<&str> {
+        match self.parent.program_name() {
+            Some(name) => Some(name),
+            None => Some(self.name),
+        }
+    }
+
+    #[cfg(feature = "version")]
+    fn version(&self) -> Option<&'static str> {
+        self.parent.version()
     }
 }
 
@@ -548,11 +581,11 @@ fn run_parser(p: &mut RawParser, frame: &mut ArgsFrame) -> Result<()> {
                 && let Some((name, idx)) = subcmd_info.search(&arg)
             {
                 let mut frame = CommandFrame {
-                    #[cfg(feature = "help")]
+                    #[cfg(any(feature = "help", feature = "version"))]
                     name,
                     parent: frame,
                 };
-                #[cfg(not(feature = "help"))]
+                #[cfg(not(any(feature = "help", feature = "version")))]
                 {
                     let _ = name;
                 }
@@ -611,6 +644,17 @@ fn visit_named(
         #[cfg(feature = "help")]
         if enc_name == "h" || enc_name == "--help" {
             return Err(crate::Error::from(ErrorKind::Help).maybe_render_help(frame));
+        }
+
+        // TODO: Configurable version?
+        #[cfg(feature = "version")]
+        if enc_name == "V" || enc_name == "--version" {
+            if frame.version().is_some() {
+                return Err(
+                    crate::Error::from(ErrorKind::Version).maybe_render_version(frame)
+                );
+            }
+            // If no version is configured, fall through to unknown argument error.
         }
 
         let mut input_arg = OsString::with_capacity(1 + enc_name.len());

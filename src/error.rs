@@ -41,6 +41,9 @@ struct Inner {
 
     /// Rendered help message.
     help: Option<String>,
+
+    /// Rendered version message.
+    version: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +68,7 @@ pub(crate) enum ErrorKind {
 
     // Not really an error, but for bubbling out.
     Help,
+    Version,
 
     // User errors.
     Custom,
@@ -137,6 +141,7 @@ impl fmt::Display for Error {
 
             // Will be rendered at the end.
             ErrorKind::Help => format_args!(""),
+            ErrorKind::Version => format_args!(""),
 
             ErrorKind::Custom => return fmt::Display::fmt(e.source.as_deref().unwrap(), f),
         };
@@ -153,6 +158,9 @@ impl fmt::Display for Error {
         if e.kind == ErrorKind::Help {
             f.write_str(e.help.as_deref().unwrap_or("help is not available"))?;
         }
+        if e.kind == ErrorKind::Version {
+            f.write_str(e.version.as_deref().unwrap_or("version is not available"))?;
+        }
 
         Ok(())
     }
@@ -167,6 +175,7 @@ impl Error {
             source: None,
             contextual_help: String::new(),
             help: None,
+            version: None,
         }))
     }
 
@@ -185,6 +194,19 @@ impl Error {
     /// If this error is not about help or feature "help" is disabled, `Err(self)` is returned.
     pub fn try_into_help(mut self) -> Result<String, Self> {
         if let Some(help) = self.0.help.take() { Ok(help) } else { Err(self) }
+    }
+
+    /// Render the version string if this error indicates a `--version` is encountered.
+    ///
+    /// # Errors
+    ///
+    /// If this error is not about version or feature "version" is disabled, `Err(self)` is returned.
+    pub fn try_into_version(mut self) -> Result<String, Self> {
+        if let Some(version) = self.0.version.take() { Ok(version) } else { Err(self) }
+    }
+
+    pub(crate) fn kind(&self) -> ErrorKind {
+        self.0.kind
     }
 
     pub(crate) fn with_source(mut self, source: DynStdError) -> Self {
@@ -213,6 +235,20 @@ impl Error {
         if self.0.kind == ErrorKind::Help {
             let out = self.0.help.insert(String::new());
             crate::help::render_help_into(out, frame);
+        }
+        self
+    }
+
+    #[cfg(not(feature = "version"))]
+    pub(crate) fn maybe_render_version(self, _: &ArgsFrame) -> Self {
+        self
+    }
+
+    #[cfg(feature = "version")]
+    pub(crate) fn maybe_render_version(mut self, frame: &ArgsFrame) -> Self {
+        if self.0.kind == ErrorKind::Version {
+            let out = self.0.version.insert(String::new());
+            crate::version::render_version_into(out, frame);
         }
         self
     }

@@ -25,7 +25,7 @@ Writing your CLI structs first before deciding which crate to use.
 ## Similar: Full-featured, out of the box
 
 palc also aim to provide a decent CLI experience under default features:
-help generations, non-UTF-8 support, argument constraints, `Args` composition,
+help generations, version output, non-UTF-8 support, argument constraints, `Args` composition,
 subcommands, you name it.
 
 Though some of clap features are not-yet-implemented.
@@ -118,7 +118,7 @@ Though some of clap features are not-yet-implemented.
 
   - [x] Long help `--help`.
   - [ ] Short help `-h`.
-  - [ ] Version `--version`.
+  - [x] Version `--version` and `-V`.
   - [x] Custom header and footer.
   - [ ] Hiding.
   - [ ] Possible values of enums.

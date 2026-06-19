@@ -24,6 +24,9 @@ mod values;
 #[cfg(feature = "help")]
 mod help;
 
+#[cfg(feature = "version")]
+mod version;
+
 pub use crate::error::Error;
 use crate::runtime::ParserFlavor;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -48,7 +51,7 @@ pub mod __private {
 
     // Macros.
     pub use crate::util::{const_concat_impl, const_concat_len};
-    pub use crate::{__const_concat, __gate_help};
+    pub use crate::{__const_concat, __gate_help, __gate_version};
     pub use std::{assert, concat, env, format_args, unimplemented, unreachable};
 
     pub use crate::values::{
@@ -70,6 +73,10 @@ pub trait Parser: ParserInternal + Sized + 'static {
         match Self::try_parse_from(std::env::args_os()) {
             Ok(v) => v,
             Err(err) => {
+                if err.kind() == ErrorKind::Version {
+                    println!("{err}");
+                    std::process::exit(0);
+                }
                 eprintln!("{err}");
                 std::process::exit(1);
             }
