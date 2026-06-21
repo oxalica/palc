@@ -4,7 +4,7 @@ error[E0277]: `Deep` is not a `palc::Subcommand`
 4 |     deep: Deep,
   |           ^^^^ this type is expected to have `derive(palc::Subcommand)` but it is not
   |
-help: the trait `Subcommand` is not implemented for `Deep`
+help: the trait `palc::__private::Subcommand` is not implemented for `Deep`
  --> tests/ui/args-subcommand-non-subcommand.rs:7:1
   |
 7 | struct Deep {}
@@ -16,7 +16,7 @@ error[E0277]: `Subargs` is not a `palc::Subcommand`
 12 |     cmd: Subargs,
    |          ^^^^^^^ this type is expected to have `derive(palc::Subcommand)` but it is not
    |
-help: the trait `Subcommand` is not implemented for `Subargs`
+help: the trait `palc::__private::Subcommand` is not implemented for `Subargs`
   --> tests/ui/args-subcommand-non-subcommand.rs:16:1
    |
 16 | struct Subargs {}

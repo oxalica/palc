@@ -12,7 +12,7 @@ help: the trait `palc::values::InferValueParserOk` is not implemented for `MyTyp
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-note: required by a bound in `assert_auto_infer_value_parser_ok`
+note: required by a bound in `palc::__private::assert_auto_infer_value_parser_ok`
   --> src/values.rs
    |
    | pub fn assert_auto_infer_value_parser_ok<P: ValueParser<AssertInferOk: InferValueParserOk>>(
@@ -32,7 +32,7 @@ help: the trait `palc::values::InferValueParserOk` is not implemented for `MyTyp
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-note: required by a bound in `assert_auto_infer_value_parser_ok`
+note: required by a bound in `palc::__private::assert_auto_infer_value_parser_ok`
   --> src/values.rs
    |
    | pub fn assert_auto_infer_value_parser_ok<P: ValueParser<AssertInferOk: InferValueParserOk>>(
@@ -52,7 +52,7 @@ help: the trait `palc::values::InferValueParserOk` is not implemented for `MyTyp
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-note: required by a bound in `assert_auto_infer_value_parser_ok`
+note: required by a bound in `palc::__private::assert_auto_infer_value_parser_ok`
   --> src/values.rs
    |
    | pub fn assert_auto_infer_value_parser_ok<P: ValueParser<AssertInferOk: InferValueParserOk>>(
@@ -72,7 +72,7 @@ help: the trait `palc::values::InferValueParserOk` is not implemented for `MyTyp
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-note: required by a bound in `assert_auto_infer_value_parser_ok`
+note: required by a bound in `palc::__private::assert_auto_infer_value_parser_ok`
   --> src/values.rs
    |
    | pub fn assert_auto_infer_value_parser_ok<P: ValueParser<AssertInferOk: InferValueParserOk>>(
@@ -92,7 +92,7 @@ help: the trait `palc::values::InferValueParserOk` is not implemented for `MyTyp
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-note: required by a bound in `assert_auto_infer_value_parser_ok`
+note: required by a bound in `palc::__private::assert_auto_infer_value_parser_ok`
   --> src/values.rs
    |
    | pub fn assert_auto_infer_value_parser_ok<P: ValueParser<AssertInferOk: InferValueParserOk>>(
@@ -112,7 +112,7 @@ help: the trait `palc::values::InferValueParserOk` is not implemented for `MyTyp
    = note: this is an internal trait that should NOT be implemented directly
    = note: types are parsable by `derive(palc::ValueEnum)`, or by implementing `TryFrom<&OsStr>`,
                `From<&OsStr>` or `FromStr`, with error type be either `&str`, `String` or `impl std::error::Error + Send + Sync`
-note: required by a bound in `assert_auto_infer_value_parser_ok`
+note: required by a bound in `palc::__private::assert_auto_infer_value_parser_ok`
   --> src/values.rs
    |
    | pub fn assert_auto_infer_value_parser_ok<P: ValueParser<AssertInferOk: InferValueParserOk>>(

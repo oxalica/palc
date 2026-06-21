@@ -1,10 +1,10 @@
-error[E0277]: the trait bound `Cli: ParserInternal` is not satisfied
+error[E0277]: the trait bound `Cli: palc::__private::ParserInternal` is not satisfied
  --> tests/ui/parser-manual-impl.rs:5:17
   |
 5 | impl Parser for Cli {}
   |                 ^^^ unsatisfied trait bound
   |
-help: the trait `ParserInternal` is not implemented for `Cli`
+help: the trait `palc::__private::ParserInternal` is not implemented for `Cli`
  --> tests/ui/parser-manual-impl.rs:3:1
   |
 3 | struct Cli {}

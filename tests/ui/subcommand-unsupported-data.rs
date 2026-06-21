@@ -21,6 +21,6 @@ where
     Unit: Subcommand,
     Tuple: Subcommand,
     Named: Subcommand,
-    Enum: Subcommand;
+    Union: Subcommand;
 
 fn main() {}

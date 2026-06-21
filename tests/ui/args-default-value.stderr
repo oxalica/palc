@@ -10,7 +10,7 @@ error[E0277]: the default value of `PathBuf` cannot be formatted
    = note: types defined with `derive(palc::ValueEnum)` will be automatically
                recognized and does not need `Display` implementation
    = note: required for `PathBuf` to implement `palc::values::DisplayDefaultValue`
-note: required by a bound in `assert_impl_display_default_value`
+note: required by a bound in `palc::__private::assert_impl_display_default_value`
   --> src/values.rs
    |
    | pub fn assert_impl_display_default_value<T: DisplayDefaultValue>(x: T) -> T {
@@ -28,7 +28,7 @@ error[E0277]: the default value of `PathBuf` cannot be formatted
    = note: types defined with `derive(palc::ValueEnum)` will be automatically
                recognized and does not need `Display` implementation
    = note: required for `PathBuf` to implement `palc::values::DisplayDefaultValue`
-note: required by a bound in `assert_impl_display_default_value`
+note: required by a bound in `palc::__private::assert_impl_display_default_value`
   --> src/values.rs
    |
    | pub fn assert_impl_display_default_value<T: DisplayDefaultValue>(x: T) -> T {
