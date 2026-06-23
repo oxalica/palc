@@ -81,7 +81,11 @@ fn expand_for_enum<'a>(def: &'a DeriveInput, data: &'a DataEnum) -> SubcommandIm
                     let help = HelpDisplay { parse: None, cmd_meta: cmd_meta.as_deref() }
                         .to_token_stream();
                     let info = quote! {
-                        &__rt::RawArgsInfo::new("", &[], &[], __rt::None, false, false, #help, &[])
+                        &__rt::RawArgsInfo::new(
+                            "", &[], &[], __rt::None, false, false, #help,
+                            __rt::__gate_version!(__rt::None, __rt::None),
+                            &[],
+                        )
                     };
                     (info, VariantKind::Unit)
                 }

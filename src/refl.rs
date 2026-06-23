@@ -98,11 +98,15 @@ pub struct RawArgsInfo {
     /// - `{:.5}`: `after_long_help`
     #[cfg(feature = "help")]
     pub(crate) help: &'static dyn fmt::Display,
+
+    /// Version string from `#[command(version = "...")]`.
+    #[cfg(feature = "version")]
+    pub(crate) version: Option<&'static str>,
 }
 
 impl RawArgsInfo {
     // Used by proc-macro.
-    pub const EMPTY_REF: &'static Self = &Self::new("", &[], &[], None, false, false, &"", &[]);
+    pub const EMPTY_REF: &'static Self = &Self::new("", &[], &[], None, false, false, &"", None, &[]);
 
     // Used by proc-macro.
     #[expect(clippy::too_many_arguments, reason = "proc-macro needs to pass this many information")]
@@ -115,6 +119,7 @@ impl RawArgsInfo {
         is_subcmd_optional: bool,
         mut has_optional_named: bool,
         help: &'static dyn fmt::Display,
+        version: Option<&'static str>,
         flattened: &[&RawArgsInfo],
     ) -> RawArgsInfo {
         #[cfg(feature = "help")]
@@ -139,6 +144,8 @@ impl RawArgsInfo {
             has_optional_named,
             #[cfg(feature = "help")]
             help,
+            #[cfg(feature = "version")]
+            version,
         }
     }
 
